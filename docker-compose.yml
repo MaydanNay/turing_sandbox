@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: turing_sandbox_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bunker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bunker}
+      POSTGRES_DB: ${POSTGRES_DB:-turing_sandbox}
+    ports:
+      # Host 5433 avoids clash with local/other Postgres on 5432 (WSL-friendly)
+      - "5433:5432"
+    volumes:
+      - turing_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bunker} -d ${POSTGRES_DB:-turing_sandbox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - turing_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: turing_sandbox_redis
+    ports:
+      # Host 6380 avoids clash with other Redis on 6379 (WSL-friendly)
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - turing_net
+
+  api:
+    build: .
+    container_name: turing_sandbox_api
+    env_file:
+      - .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bunker:bunker@postgres:5432/turing_sandbox
+      REDIS_URL: redis://redis:6379/0
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      CORS_ORIGINS: "*"
+      MIN_HUMAN_PLAYERS: "1"
+      ROOM_CAPACITY: "4"
+    ports:
+      # Host 8001 — 8000 often taken by Mimora in this monorepo (WSL-friendly)
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - turing_net
+
+volumes:
+  turing_pg_data:
+
+networks:
+  turing_net:
+    driver: bridge
