@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
     cors_origins: str = "*"
     min_human_players: int = 1
-    room_capacity: int = 4
+    room_capacity: int = 8
 
     @property
     def cors_origin_list(self) -> list[str]:

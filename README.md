@@ -1,3 +1,24 @@
+# diana (старт)
+
+  cd /home/diana/progects/turing_sandbox
+  docker compose up -d
+
+
+  source ~/.bashrc
+  fnm use 22
+
+  cd /home/diana/progects/turing_sandbox/frontend
+  cp .env.example .env   # только первый раз
+  npm install            # только первый раз
+  npm run dev
+
+# diana (првоерка)
+  curl http://localhost:8003/health
+
+# diana (остановка)
+  cd /home/diana/progects/turing_sandbox
+  docker compose down  
+
 # Turing Sandbox — «Бункер» (MVP Backend)
 
 Скелет бэкенда для реалтайм-игры «Бункер»: FastAPI + PostgreSQL + Redis + WebSockets + mock-агенты Helixa.
