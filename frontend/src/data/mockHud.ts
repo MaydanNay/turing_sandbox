@@ -9,11 +9,20 @@ export interface HudPlayerSlot {
   isActive?: boolean;
 }
 
+import type { CardType } from '@/types/card';
+
 export interface HudChatLine {
   id: string;
   sender: string;
   text: string;
   senderColor?: string;
+  kind?: 'message' | 'system' | 'turn' | 'reveal';
+  timestamp?: string;
+  subtitle?: string;
+  cardTitle?: string;
+  cardType?: CardType;
+  cardDescription?: string;
+  cardImageUrl?: string;
 }
 
 export const MOCK_HUD_PLAYERS: HudPlayerSlot[] = [
@@ -51,7 +60,6 @@ export const MOCK_HUD_PLAYERS: HudPlayerSlot[] = [
     avatarColor: 'linear-gradient(135deg,#1a3a3a,#2dd4bf)',
     status: 'alive',
     statusLabel: 'VOTING',
-    isActive: true,
   },
   {
     id: 'logan',
@@ -66,6 +74,7 @@ export const MOCK_HUD_PLAYERS: HudPlayerSlot[] = [
     avatarColor: 'linear-gradient(135deg,#2a1a1a,#f87171)',
     status: 'alive',
     statusLabel: '0 VOTING',
+    isActive: true,
   },
   {
     id: 'roxy',
@@ -77,12 +86,33 @@ export const MOCK_HUD_PLAYERS: HudPlayerSlot[] = [
 ];
 
 export const MOCK_HUD_CHAT: HudChatLine[] = [
-  { id: '1', sender: 'Vance', text: 'Кто-нибудь слышал шум из вентиляции?' },
-  { id: '2', sender: 'Roxy', text: 'Терминал снова пишет чужие логи.' },
-  { id: '3', sender: 'Cole', text: 'Не трогаем конвой до рассвета.' },
-  { id: '4', sender: 'Martha', text: 'Пенни выходила из серверной без пропуска.' },
-  { id: '5', sender: 'Gwen', text: 'Голосую за изоляцию — протокол не терпит дыр.' },
-  { id: '6', sender: 'Logan', text: 'Три аномалии биометрии за последний час.' },
-  { id: '7', sender: 'Chester', text: 'Я видел, как кто-то двигал камеры.' },
-  { id: '8', sender: 'System', text: '>>> ФАЗА ГОЛОСОВАНИЯ АКТИВНА.', senderColor: '#a3a3a3' },
+  {
+    id: '1',
+    sender: 'Penny',
+    text: 'Это не я ребт, вообще то я думаю что...',
+    timestamp: '12:00',
+    kind: 'message',
+  },
+  {
+    id: '2',
+    sender: 'Chester',
+    text: 'Это не я ребт, вообще то я думаю что...',
+    timestamp: '12:00',
+    kind: 'message',
+  },
+  {
+    id: '3',
+    sender: 'System',
+    text: 'Время Chester раскрывать карту',
+    kind: 'turn',
+    senderColor: '#2dd4bf',
+  },
+  {
+    id: '4',
+    sender: 'Chester',
+    text: 'Chester раскрыл свой навык',
+    subtitle: 'Оказывается он хакер',
+    cardTitle: 'здесь будет карта',
+    kind: 'reveal',
+  },
 ];

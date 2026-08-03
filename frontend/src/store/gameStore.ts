@@ -15,6 +15,8 @@ import type {
   TypingIndicator,
   WsClientMessage,
 } from '@/types/game';
+import type { PlayerHandCard } from '@/types/card';
+import { revealTypeLabel, toRevealCardPayload } from '@/utils/cardArt';
 import { clampSuspicion } from '@/utils/seatPositions';
 
 interface GameStore {
@@ -40,6 +42,11 @@ interface GameStore {
   handleClientMessage: (msg: WsClientMessage) => void;
   applyRoomState: (state: BackendRoomState, selfId?: string) => void;
   addChatMessage: (msg: Omit<ChatMessage, 'id'>) => void;
+  recordCardReveal: (
+    playerName: string,
+    card: Pick<PlayerHandCard, 'type' | 'title' | 'description' | 'imageUrl'>,
+    subtitle?: string,
+  ) => void;
   bumpSuspicion: (targetId: string, amount?: number) => void;
   setTyping: (sender: string) => void;
   cycleMockPhase: () => void;
@@ -225,9 +232,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
           timestamp: msg.ts,
         });
         break;
-      case 'message':
+      case 'message': {
+        const players = get().players;
+        const myProfile = get().myProfile;
+        const player = players.find((p) => p.id === msg.client_id);
+        const senderName =
+          player?.name ??
+          (myProfile?.id === msg.client_id ? myProfile.name : msg.client_id);
         get().addChatMessage({
-          sender: msg.client_id,
+          sender: senderName,
           text: msg.text ?? '',
           timestamp: msg.ts,
           is_ai: msg.is_ai,
@@ -236,6 +249,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           get().bumpSuspicion(String(msg.payload.target), 15);
         }
         break;
+      }
       case 'player_joined':
         get().addChatMessage({
           sender: 'Система',
@@ -291,6 +305,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       chat: [...s.chat, { ...msg, id: crypto.randomUUID() }],
     })),
 
+  recordCardReveal: (playerName, card, subtitle) => {
+    const ts = new Date().toISOString();
+    const art = toRevealCardPayload(card);
+    const typeLabel = revealTypeLabel(card.type);
+
+    get().addChatMessage({
+      sender: 'Система',
+      text: `Время ${playerName} раскрывать карту`,
+      kind: 'turn',
+      senderColor: '#2dd4bf',
+      timestamp: ts,
+    });
+    get().addChatMessage({
+      sender: playerName,
+      text: `${playerName} раскрыл ${typeLabel}`,
+      subtitle: subtitle ?? card.description,
+      kind: 'reveal',
+      timestamp: ts,
+      ...art,
+    });
+  },
+
   bumpSuspicion: (targetId, amount = 10) =>
     set((s) => ({
       players: s.players.map((p) =>
@@ -332,9 +368,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ gatheredAtTable: true });
     get().addChatMessage({
       sender: 'Система',
-      text: '>>> Сбор за столом переговоров.',
+      text: 'Сбор за столом переговоров.',
+      kind: 'system',
       timestamp: new Date().toISOString(),
     });
+    get().recordCardReveal(
+      'Chester',
+      {
+        type: 'skill',
+        title: 'Хакерство',
+        description: 'Взлом терминалов и обход замков',
+      },
+      'Оказывается он хакер',
+    );
   },
 
   reset: () => set(initialState),

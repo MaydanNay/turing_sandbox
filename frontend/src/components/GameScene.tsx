@@ -17,6 +17,8 @@ import { PrivateChatOverlay } from '@/components/PrivateChat';
 import { RoundTable } from '@/components/RoundTable';
 import { MOCK_HAND_CARDS } from '@/data/mockHand';
 import { genderLabel } from '@/data/characters';
+import { cardRevealLabel } from '@/utils/cardLabel';
+import { useGameStore } from '@/store/gameStore';
 import type { PlayerHandCard } from '@/types/card';
 import type { ChatMessage, GamePhase, MyProfile, Player, TypingIndicator } from '@/types/game';
 
@@ -66,7 +68,7 @@ export function GameScene({
   const [openPanel, setOpenPanel] = useState<OpenPanel>(null);
   const [handCards, setHandCards] = useState<PlayerHandCard[]>(MOCK_HAND_CARDS);
   const [isMyTurnToReveal, setIsMyTurnToReveal] = useState(false);
-  const [lastRevealedCard, setLastRevealedCard] = useState<PlayerHandCard | null>(null);
+  const recordCardReveal = useGameStore((s) => s.recordCardReveal);
   const [privateChatPlayerId, setPrivateChatPlayerId] = useState<string | null>(null);
   const wasGatheredRef = useRef(false);
 
@@ -81,7 +83,6 @@ export function GameScene({
     if (!gatheredAtTable) {
       wasGatheredRef.current = false;
       setIsMyTurnToReveal(false);
-      setLastRevealedCard(null);
     }
   }, [gatheredAtTable]);
 
@@ -92,7 +93,6 @@ export function GameScene({
   const handleGatherAtTable = useCallback(() => {
     onGatherAtTable();
     setIsMyTurnToReveal(true);
-    setLastRevealedCard(null);
   }, [onGatherAtTable]);
 
   const handleRevealCard = useCallback(
@@ -104,10 +104,20 @@ export function GameScene({
 
       const revealed = { ...card, isRevealed: true };
       setHandCards((prev) => prev.map((c) => (c.id === cardId ? revealed : c)));
-      setLastRevealedCard(revealed);
+
+      recordCardReveal(
+        myProfile?.name ?? 'Вы',
+        {
+          type: revealed.type,
+          title: revealed.title,
+          description: revealed.description,
+          imageUrl: revealed.imageUrl,
+        },
+        cardRevealLabel(revealed),
+      );
       setIsMyTurnToReveal(false);
     },
-    [handCards, isMyTurnToReveal],
+    [handCards, isMyTurnToReveal, myProfile, recordCardReveal],
   );
 
   return (
@@ -132,9 +142,7 @@ export function GameScene({
       <div className="pointer-events-none absolute inset-0 z-[35] bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.08)_50%)] bg-[length:100%_4px] opacity-25" />
 
       {/* Мини-HUD: фаза + статус */}
-      <div
-        className={`absolute left-4 z-[36] flex flex-wrap items-center gap-2 ${gatheredAtTable ? 'top-[5.25rem]' : 'top-4'}`}
-      >
+      <div className="absolute left-4 top-4 z-[36] flex flex-wrap items-center gap-2">
         {!gatheredAtTable && (
           <span className="rounded-full border border-bunker-amber/60 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-amber backdrop-blur-md">
             Нажмите на стол
@@ -158,26 +166,25 @@ export function GameScene({
         )}
       </div>
 
-      {/* Рука игрока — 6 карт */}
-      <BottomHand
-        cards={handCards}
-        revealMode={gatheredAtTable && isMyTurnToReveal}
-        onRevealCard={handleRevealCard}
-      />
+      {!gatheredAtTable && (
+        <BottomHand
+          cards={handCards}
+          revealMode={false}
+          onRevealCard={handleRevealCard}
+        />
+      )}
 
       <GameHud
         visible={gatheredAtTable}
-        selfId={clientId ?? undefined}
+        chat={chat}
+        players={players}
+        myProfile={myProfile}
         selfCharacterId={myProfile?.characterId}
-        selectedPlayerId={selectedPlayerId}
         isMyTurnToReveal={isMyTurnToReveal}
-        lastRevealedCard={lastRevealedCard}
-        revealPlayerName={myProfile?.name ?? 'Вы'}
-        onSelectPlayer={onSelectPlayer}
+        gamePhase={gameState}
+        gatheredAtTable={gatheredAtTable}
+        typing={typing.map((t) => t.sender)}
         onSendMessage={onSendChat}
-        onVoteEvict={() => {
-          if (selectedPlayerId) onVote(selectedPlayerId);
-        }}
       />
 
       {/* Кнопки HUD — открывают панели */}

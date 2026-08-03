@@ -1,69 +1,55 @@
-import { ArrowUp, Paperclip } from 'lucide-react';
+import { ArrowUp } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 
+import { RevealCardThumb } from '@/components/Hand/RevealCardThumb';
+import { GameProcessPanel } from '@/components/Hud/GameProcessPanel';
+import { PlayerEyeButton, PlayerInspectView } from '@/components/Hud/PlayerInspectPanel';
 import { ASSETS, hasCharacterCard } from '@/config/assets';
-import { MOCK_HUD_CHAT, MOCK_HUD_PLAYERS, type HudChatLine } from '@/data/mockHud';
+import type { HudChatLine, HudPlayerSlot } from '@/data/mockHud';
+import type { GamePhase, MyProfile, Player } from '@/types/game';
+import { resolveSenderCharacterId } from '@/utils/chatAdapter';
 
 interface GameChatPanelProps {
-  messages?: HudChatLine[];
+  messages: HudChatLine[];
+  players: HudPlayerSlot[];
+  rosterPlayers?: Player[];
+  myProfile?: MyProfile | null;
   selfId?: string;
   onSend?: (text: string) => void;
   inputDisabled?: boolean;
   placeholder?: string;
   topOffsetClass?: string;
+  typing?: string[];
+  gamePhase?: GamePhase;
+  revealPlayer?: HudPlayerSlot | null;
+  isMyRevealTurn?: boolean;
+  gatheredAtTable?: boolean;
 }
 
-function isOwnMessage(msg: HudChatLine): boolean {
-  return msg.sender === 'Вы';
-}
-
-function isSystemMessage(msg: HudChatLine): boolean {
-  return msg.sender === 'System';
-}
-
-function resolveCharacterId(sender: string, selfId?: string): string | null {
-  if (sender === 'Вы') return selfId ?? null;
-  if (sender === 'System') return null;
-  const match = MOCK_HUD_PLAYERS.find(
-    (player) => player.name.toLowerCase() === sender.toLowerCase(),
-  );
-  return match?.id ?? sender.toLowerCase();
-}
-
-function ChatAvatar({ sender, selfId }: { sender: string; selfId?: string }) {
-  const characterId = resolveCharacterId(sender, selfId);
-  const [src, setSrc] = useState(() => {
-    if (!characterId) return null;
-    return hasCharacterCard(characterId)
+function PlayerAvatar({
+  characterId,
+  name,
+  size = 'md',
+}: {
+  characterId: string;
+  name: string;
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  const [src, setSrc] = useState(() =>
+    hasCharacterCard(characterId)
       ? ASSETS.cards.character(characterId)
-      : ASSETS.characters.chibi(characterId);
-  });
+      : ASSETS.characters.chibi(characterId),
+  );
 
-  useEffect(() => {
-    if (!characterId) {
-      setSrc(null);
-      return;
-    }
-    setSrc(
-      hasCharacterCard(characterId)
-        ? ASSETS.cards.character(characterId)
-        : ASSETS.characters.chibi(characterId),
-    );
-  }, [characterId]);
-
-  if (!characterId || !src) {
-    return (
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#4a4a4a] text-xs font-semibold text-neutral-200">
-        {sender === 'System' ? '⚙' : sender.charAt(0).toUpperCase()}
-      </div>
-    );
-  }
+  const sizeClass =
+    size === 'lg' ? 'h-14 w-14' : size === 'sm' ? 'h-10 w-10' : 'h-12 w-12';
 
   return (
-    <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-neutral-800">
+    <div className={`${sizeClass} shrink-0 overflow-hidden rounded-full bg-neutral-700`}>
       <img
         src={src}
-        alt=""
+        alt={name}
         className="h-full w-full object-cover object-top"
         draggable={false}
         onError={() => setSrc(ASSETS.characters.chibi(characterId))}
@@ -72,104 +58,313 @@ function ChatAvatar({ sender, selfId }: { sender: string; selfId?: string }) {
   );
 }
 
+function ChatAvatar({
+  sender,
+  selfId,
+  rosterPlayers,
+  myProfile,
+}: {
+  sender: string;
+  selfId?: string;
+  rosterPlayers?: Player[];
+  myProfile?: MyProfile | null;
+}) {
+  const characterId = resolveSenderCharacterId(
+    sender,
+    rosterPlayers ?? [],
+    myProfile,
+  ) ?? (sender === 'Вы' ? selfId : null);
+
+  if (!characterId) {
+    return (
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-600 text-sm font-semibold text-white">
+        {sender.charAt(0)}
+      </div>
+    );
+  }
+  return <PlayerAvatar characterId={characterId} name={sender} />;
+}
+
+function PlayerSidebarRow({
+  player,
+  dimmed,
+  highlighted,
+  onInspect,
+}: {
+  player: HudPlayerSlot;
+  dimmed?: boolean;
+  highlighted?: boolean;
+  onInspect: (characterId: string) => void;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-2 px-4 py-3 ${
+        dimmed ? 'opacity-40' : highlighted ? 'bg-white/[0.06]' : ''
+      }`}
+    >
+      <PlayerAvatar characterId={player.id} name={player.name} size="sm" />
+      <span className="min-w-0 flex-1 truncate text-base font-medium capitalize text-white/90">
+        {player.name}
+      </span>
+      <PlayerEyeButton
+        playerName={player.name}
+        onClick={() => onInspect(player.id)}
+      />
+    </div>
+  );
+}
+
+function PlayerSidebar({
+  players,
+  revealPlayer,
+  gamePhase = 'INIT',
+  isMyRevealTurn = false,
+  gatheredAtTable = true,
+  inspectCharacterId,
+  rosterPlayers,
+  onInspect,
+}: {
+  players: HudPlayerSlot[];
+  revealPlayer?: HudPlayerSlot | null;
+  gamePhase?: GamePhase;
+  isMyRevealTurn?: boolean;
+  gatheredAtTable?: boolean;
+  inspectCharacterId?: string | null;
+  rosterPlayers?: Player[];
+  onInspect: (characterId: string) => void;
+}) {
+  const handleInspect = (characterId: string) => {
+    onInspect(inspectCharacterId === characterId ? '' : characterId);
+  };
+
+  return (
+    <aside className="flex w-[min(240px,28vw)] shrink-0 flex-col overflow-hidden rounded-3xl bg-[#2C2C2C] sm:w-[260px]">
+      <GameProcessPanel
+        phase={gamePhase}
+        revealPlayer={revealPlayer}
+        isMyRevealTurn={isMyRevealTurn}
+        gatheredAtTable={gatheredAtTable}
+      />
+
+      <AnimatePresence mode="wait">
+        {inspectCharacterId ? (
+          <PlayerInspectView
+            key={inspectCharacterId}
+            characterId={inspectCharacterId}
+            rosterPlayers={rosterPlayers}
+            onClose={() => onInspect('')}
+          />
+        ) : (
+          <motion.div
+            key="player-list"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="custom-scrollbar flex-1 overflow-y-auto pb-3"
+          >
+            {players.map((player, index) => (
+              <div key={player.id}>
+                {index > 0 && <div className="mx-4 border-t border-white/10" />}
+                <PlayerSidebarRow
+                  player={player}
+                  dimmed={player.status === 'dead'}
+                  highlighted={player.isActive}
+                  onInspect={handleInspect}
+                />
+              </div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </aside>
+  );
+}
+
+function MessageBubble({
+  msg,
+  selfId,
+  rosterPlayers,
+  myProfile,
+}: {
+  msg: HudChatLine;
+  selfId?: string;
+  rosterPlayers?: Player[];
+  myProfile?: MyProfile | null;
+}) {
+  return (
+    <div className="flex gap-3">
+      <ChatAvatar
+        sender={msg.sender}
+        selfId={selfId}
+        rosterPlayers={rosterPlayers}
+        myProfile={myProfile}
+      />
+      <div className="min-w-0 flex-1 rounded-2xl bg-white px-4 py-3 shadow-sm">
+        <p className="text-sm font-semibold capitalize text-neutral-900">{msg.sender}</p>
+        <p className="mt-1 text-sm leading-relaxed text-neutral-800">{msg.text}</p>
+        {msg.timestamp && (
+          <p className="mt-2 text-right text-xs text-neutral-400">{msg.timestamp}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TurnNotice({ msg }: { msg: HudChatLine }) {
+  return (
+    <p
+      className="py-2 text-center text-sm font-medium"
+      style={{ color: msg.senderColor ?? '#2dd4bf' }}
+    >
+      {msg.text}
+    </p>
+  );
+}
+
+function RevealBanner({
+  msg,
+  selfId,
+  rosterPlayers,
+  myProfile,
+}: {
+  msg: HudChatLine;
+  selfId?: string;
+  rosterPlayers?: Player[];
+  myProfile?: MyProfile | null;
+}) {
+  return (
+    <div className="relative overflow-visible rounded-2xl bg-[#F5E6A8] px-4 py-4 pr-[7.5rem] shadow-sm">
+      <div className="flex items-center gap-3">
+        <ChatAvatar
+          sender={msg.sender}
+          selfId={selfId}
+          rosterPlayers={rosterPlayers}
+          myProfile={myProfile}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-neutral-900">{msg.text}</p>
+          {msg.subtitle && (
+            <p className="mt-1 text-sm text-neutral-700">{msg.subtitle}</p>
+          )}
+        </div>
+      </div>
+      {msg.cardTitle && (
+        <RevealCardThumb
+          type={msg.cardType ?? 'skill'}
+          title={msg.cardTitle}
+          description={msg.cardDescription ?? msg.subtitle}
+          imageUrl={msg.cardImageUrl}
+        />
+      )}
+    </div>
+  );
+}
+
 export function GameChatPanel({
-  messages: externalMessages,
+  messages,
+  players,
+  rosterPlayers,
+  myProfile,
   selfId,
   onSend,
   inputDisabled = false,
-  placeholder = 'Отправить сообщение...',
-  topOffsetClass = 'top-[4.5rem] sm:top-[5rem]',
+  placeholder = 'Отправить сообщение ...',
+  topOffsetClass = 'top-12 sm:top-14',
+  typing = [],
+  gamePhase = 'PITCH',
+  revealPlayer = null,
+  isMyRevealTurn = false,
+  gatheredAtTable = true,
 }: GameChatPanelProps) {
-  const [internalMessages, setInternalMessages] = useState<HudChatLine[]>(MOCK_HUD_CHAT);
   const [draft, setDraft] = useState('');
+  const [inspectCharacterId, setInspectCharacterId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const messages = externalMessages ?? internalMessages;
+  const activeTypers = typing.filter(
+    (name) => myProfile?.name !== name && name.length > 0,
+  );
 
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, activeTypers.join(',')]);
 
   const submit = () => {
     if (inputDisabled) return;
     const text = draft.trim();
     if (!text) return;
-
-    const line: HudChatLine = {
-      id: `local-${Date.now()}`,
-      sender: 'Вы',
-      text,
-      senderColor: '#facc15',
-    };
-
-    if (!externalMessages) {
-      setInternalMessages((prev) => [...prev, line]);
-    }
     onSend?.(text);
     setDraft('');
   };
 
+  const handleInspect = (characterId: string) => {
+    setInspectCharacterId(characterId || null);
+  };
+
   return (
     <div
-      className={`pointer-events-auto absolute bottom-28 left-4 flex ${topOffsetClass} w-[min(540px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col`}
+      className={`pointer-events-auto absolute bottom-4 left-4 right-20 flex ${topOffsetClass} min-w-0 gap-4`}
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-[#2C2C2C] p-5 shadow-2xl sm:p-6">
-        <p className="mb-4 font-display text-lg font-semibold text-white">Общий чат</p>
+      <PlayerSidebar
+        players={players}
+        revealPlayer={revealPlayer}
+        gamePhase={gamePhase}
+        isMyRevealTurn={isMyRevealTurn}
+        gatheredAtTable={gatheredAtTable}
+        inspectCharacterId={inspectCharacterId}
+        rosterPlayers={rosterPlayers}
+        onInspect={handleInspect}
+      />
 
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl bg-[#2C2C2C] p-4 shadow-2xl sm:p-5">
         <div
           ref={listRef}
-          className="custom-scrollbar flex flex-1 flex-col gap-3 overflow-y-auto pr-1"
+          className="custom-scrollbar flex flex-1 flex-col gap-4 overflow-y-auto pr-1"
         >
+          {messages.length === 0 && (
+            <p className="py-8 text-center text-sm text-neutral-500">
+              Сообщений пока нет. Напишите первым.
+            </p>
+          )}
           {messages.map((msg) => {
-            if (isOwnMessage(msg)) {
+            if (msg.kind === 'turn' || msg.kind === 'system') {
+              return <TurnNotice key={msg.id} msg={msg} />;
+            }
+            if (msg.kind === 'reveal') {
               return (
-                <div key={msg.id} className="flex items-end justify-end gap-2">
-                  <div className="max-w-[78%] rounded-2xl rounded-br-md bg-white px-4 py-2.5 text-sm text-neutral-900 shadow-sm">
-                    {msg.text}
-                  </div>
-                  <ChatAvatar sender={msg.sender} selfId={selfId} />
-                </div>
+                <RevealBanner
+                  key={msg.id}
+                  msg={msg}
+                  selfId={selfId}
+                  rosterPlayers={rosterPlayers}
+                  myProfile={myProfile}
+                />
               );
             }
-
-            if (isSystemMessage(msg)) {
-              return (
-                <div key={msg.id} className="flex justify-center px-2">
-                  <p
-                    className="text-center text-xs leading-relaxed"
-                    style={{ color: msg.senderColor ?? '#a3a3a3' }}
-                  >
-                    {msg.text}
-                  </p>
-                </div>
-              );
-            }
-
             return (
-              <div key={msg.id} className="flex items-end gap-2">
-                <ChatAvatar sender={msg.sender} selfId={selfId} />
-                <div className="max-w-[78%] rounded-2xl rounded-bl-md bg-[#3a3a3a] px-4 py-2.5 text-sm text-neutral-100 shadow-sm">
-                  {msg.text}
-                </div>
-              </div>
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                selfId={selfId}
+                rosterPlayers={rosterPlayers}
+                myProfile={myProfile}
+              />
             );
           })}
         </div>
 
+        {activeTypers.length > 0 && (
+          <p className="mt-2 px-1 text-xs text-neutral-400">
+            {activeTypers.join(', ')} печатает...
+          </p>
+        )}
+
         <div
-          className={`mt-4 flex items-center gap-3 rounded-2xl bg-white px-4 py-2 shadow-inner ${
+          className={`mt-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 shadow-inner ${
             inputDisabled ? 'opacity-40' : ''
           }`}
         >
-          <button
-            type="button"
-            disabled={inputDisabled}
-            className="text-neutral-400 transition hover:text-neutral-600 disabled:cursor-not-allowed"
-            aria-label="Прикрепить файл"
-          >
-            <Paperclip className="h-5 w-5" />
-          </button>
           <input
             type="text"
             value={draft}
@@ -187,7 +382,7 @@ export function GameChatPanel({
             type="button"
             onClick={submit}
             disabled={inputDisabled}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-black text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed"
             aria-label="Отправить"
           >
             <ArrowUp className="h-4 w-4" strokeWidth={2.5} />

@@ -2,6 +2,8 @@ export type GamePhase = 'INIT' | 'PITCH' | 'CONFLICT' | 'VOTE' | 'RESOLVE';
 
 export type Gender = 'male' | 'female';
 
+import type { CardType } from '@/types/card';
+
 export interface Player {
   id: string;
   characterId: string;
@@ -26,6 +28,13 @@ export interface ChatMessage {
   text: string;
   timestamp: string;
   is_ai?: boolean;
+  kind?: 'message' | 'system' | 'turn' | 'reveal';
+  subtitle?: string;
+  cardTitle?: string;
+  cardType?: CardType;
+  cardDescription?: string;
+  cardImageUrl?: string;
+  senderColor?: string;
 }
 
 export interface MyProfile {
