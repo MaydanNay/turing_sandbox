@@ -1,4 +1,5 @@
 import type { HudChatLine } from '@/data/mockHud';
+import type { PlayerHandCard } from '@/types/card';
 import type { ChatMessage, GamePhase, MyProfile, Player } from '@/types/game';
 import { chatMessagesToHudLines, playersToSidebarSlots } from '@/utils/chatAdapter';
 
@@ -11,6 +12,8 @@ interface GameHudProps {
   myProfile?: MyProfile | null;
   selfCharacterId?: string;
   isMyTurnToReveal?: boolean;
+  handCards?: PlayerHandCard[];
+  onRevealCard?: (cardId: string) => void;
   gamePhase?: GamePhase;
   gatheredAtTable?: boolean;
   typing?: string[];
@@ -71,6 +74,8 @@ export function GameHud({
   myProfile,
   selfCharacterId,
   isMyTurnToReveal = false,
+  handCards = [],
+  onRevealCard,
   gamePhase = 'PITCH',
   gatheredAtTable = true,
   typing = [],
@@ -110,13 +115,15 @@ export function GameHud({
         myProfile={myProfile}
         selfId={selfCharacterId}
         onSend={onSendMessage}
-        inputDisabled={isMyTurnToReveal}
+        inputDisabled={isMyRevealTurn}
         typing={typing}
         topOffsetClass="top-12 sm:top-14"
         gamePhase={gamePhase}
         revealPlayer={revealPlayer}
         isMyRevealTurn={isMyRevealTurn}
         gatheredAtTable={gatheredAtTable}
+        handCards={handCards}
+        onRevealCard={onRevealCard}
       />
     </div>
   );

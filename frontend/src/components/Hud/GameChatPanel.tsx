@@ -5,8 +5,10 @@ import { useEffect, useRef, useState } from 'react';
 import { RevealCardThumb } from '@/components/Hand/RevealCardThumb';
 import { GameProcessPanel } from '@/components/Hud/GameProcessPanel';
 import { PlayerEyeButton, PlayerInspectView } from '@/components/Hud/PlayerInspectPanel';
+import { RevealTurnPanel } from '@/components/Hud/RevealTurnPanel';
 import { ASSETS, hasCharacterCard } from '@/config/assets';
 import type { HudChatLine, HudPlayerSlot } from '@/data/mockHud';
+import type { PlayerHandCard } from '@/types/card';
 import type { GamePhase, MyProfile, Player } from '@/types/game';
 import { resolveSenderCharacterId } from '@/utils/chatAdapter';
 
@@ -25,6 +27,8 @@ interface GameChatPanelProps {
   revealPlayer?: HudPlayerSlot | null;
   isMyRevealTurn?: boolean;
   gatheredAtTable?: boolean;
+  handCards?: PlayerHandCard[];
+  onRevealCard?: (cardId: string) => void;
 }
 
 function PlayerAvatar({
@@ -276,6 +280,8 @@ export function GameChatPanel({
   revealPlayer = null,
   isMyRevealTurn = false,
   gatheredAtTable = true,
+  handCards = [],
+  onRevealCard,
 }: GameChatPanelProps) {
   const [draft, setDraft] = useState('');
   const [inspectCharacterId, setInspectCharacterId] = useState<string | null>(null);
@@ -360,6 +366,10 @@ export function GameChatPanel({
           </p>
         )}
 
+        {isMyRevealTurn && onRevealCard && (
+          <RevealTurnPanel cards={handCards} onRevealCard={onRevealCard} />
+        )}
+
         <div
           className={`mt-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 shadow-inner ${
             inputDisabled ? 'opacity-40' : ''
@@ -371,7 +381,13 @@ export function GameChatPanel({
             readOnly={inputDisabled}
             onChange={(e) => !inputDisabled && setDraft(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
-            placeholder={inputDisabled ? 'Ожидание действия...' : placeholder}
+            placeholder={
+              isMyRevealTurn
+                ? 'Сначала раскройте карту...'
+                : inputDisabled
+                  ? 'Ожидание действия...'
+                  : placeholder
+            }
             className={`min-w-0 flex-1 bg-transparent py-2 text-sm text-neutral-900 focus:outline-none ${
               inputDisabled
                 ? 'cursor-not-allowed placeholder:text-neutral-400/40'

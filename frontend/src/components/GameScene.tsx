@@ -15,6 +15,7 @@ import { GameHud } from '@/components/Hud';
 import { HudFab, PanelOverlay } from '@/components/PanelOverlay';
 import { PrivateChatOverlay } from '@/components/PrivateChat';
 import { RoundTable } from '@/components/RoundTable';
+import { MOCK_PLAYER_HANDS } from '@/data/mockPlayerHands';
 import { MOCK_HAND_CARDS } from '@/data/mockHand';
 import { genderLabel } from '@/data/characters';
 import { cardRevealLabel } from '@/utils/cardLabel';
@@ -74,6 +75,12 @@ export function GameScene({
 
   const privateChatPlayer =
     players.find((p) => p.id === privateChatPlayerId) ?? null;
+
+  useEffect(() => {
+    if (myProfile?.characterId && MOCK_PLAYER_HANDS[myProfile.characterId]) {
+      setHandCards(MOCK_PLAYER_HANDS[myProfile.characterId]!);
+    }
+  }, [myProfile?.characterId]);
 
   useEffect(() => {
     if (gatheredAtTable && !wasGatheredRef.current) {
@@ -181,6 +188,8 @@ export function GameScene({
         myProfile={myProfile}
         selfCharacterId={myProfile?.characterId}
         isMyTurnToReveal={isMyTurnToReveal}
+        handCards={handCards}
+        onRevealCard={handleRevealCard}
         gamePhase={gameState}
         gatheredAtTable={gatheredAtTable}
         typing={typing.map((t) => t.sender)}
