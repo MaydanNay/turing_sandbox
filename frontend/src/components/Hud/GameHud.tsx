@@ -1,6 +1,14 @@
+import { useCallback, useState } from 'react';
+
 import type { HudChatLine } from '@/data/mockHud';
+import {
+  getPhaseCountdownConfig,
+  isInVoteWindow,
+  isRevealPhase,
+} from '@/data/gamePhaseConfig';
 import type { PlayerHandCard } from '@/types/card';
 import type { ChatMessage, GamePhase, MyProfile, Player } from '@/types/game';
+import { usePhaseCountdown } from '@/hooks/usePhaseCountdown';
 import { chatMessagesToHudLines, playersToSidebarSlots } from '@/utils/chatAdapter';
 
 import { GameChatPanel } from './GameChatPanel';
@@ -18,6 +26,10 @@ interface GameHudProps {
   gatheredAtTable?: boolean;
   typing?: string[];
   onSendMessage?: (text: string) => void;
+  onVoteToBrig?: (targetCharacterId: string) => void;
+  votes?: Record<string, string>;
+  clientId?: string | null;
+  mockMode?: boolean;
 }
 
 function pendingRevealCharacterId(
@@ -80,10 +92,12 @@ export function GameHud({
   gatheredAtTable = true,
   typing = [],
   onSendMessage,
+  onVoteToBrig,
+  votes = {},
+  clientId,
+  mockMode = false,
 }: GameHudProps) {
-  if (!visible) return null;
-
-  const hudMessages: HudChatLine[] = chatMessagesToHudLines(chat, players, myProfile);
+  const [forceVoting, setForceVoting] = useState(false);
 
   const pendingRevealId =
     (isMyTurnToReveal && myProfile?.characterId) ||
@@ -101,13 +115,42 @@ export function GameHud({
     ? sidebarPlayers.find((p) => p.id === pendingRevealId) ?? null
     : null;
 
+  const revealCharacterId =
+    revealPlayer && isRevealPhase(gamePhase) ? revealPlayer.id : null;
+
+  const { resetKey, initialSeconds } = getPhaseCountdownConfig(
+    gamePhase,
+    gatheredAtTable,
+    revealCharacterId,
+  );
+
+  const remaining = usePhaseCountdown(initialSeconds, resetKey);
+
+  const handleMockStartVoting = useCallback(() => {
+    setForceVoting(true);
+  }, []);
+
+  if (!visible) return null;
+
+  const hudMessages: HudChatLine[] = chatMessagesToHudLines(chat, players, myProfile);
+
   const isMyRevealTurn = Boolean(
     isMyTurnToReveal ||
       (myProfile && pendingRevealId === myProfile.characterId),
   );
 
+  const isVotingMode =
+    forceVoting || gamePhase === 'VOTE' || isInVoteWindow(gamePhase, remaining);
+
+  const voterId = clientId ?? myProfile?.id;
+  const hasVoted = Boolean(voterId && votes[voterId]);
+
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
+      <div
+        className="pointer-events-none absolute inset-0 bg-black/10 backdrop-blur-[24px]"
+        aria-hidden
+      />
       <GameChatPanel
         messages={hudMessages}
         players={sidebarPlayers}
@@ -124,6 +167,12 @@ export function GameHud({
         gatheredAtTable={gatheredAtTable}
         handCards={handCards}
         onRevealCard={onRevealCard}
+        isVotingMode={isVotingMode}
+        hasVoted={hasVoted}
+        onVoteToBrig={onVoteToBrig}
+        mockMode={mockMode}
+        onMockStartVoting={handleMockStartVoting}
+        forceVoting={forceVoting}
       />
     </div>
   );

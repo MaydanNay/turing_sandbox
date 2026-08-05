@@ -3,9 +3,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 
 import { RevealCardThumb } from '@/components/Hand/RevealCardThumb';
+import { CHAT_PANEL_SURFACE_CLASS } from '@/components/Hud/chatPanelSurface';
 import { GameProcessPanel } from '@/components/Hud/GameProcessPanel';
 import { PlayerEyeButton, PlayerInspectView } from '@/components/Hud/PlayerInspectPanel';
 import { RevealTurnPanel } from '@/components/Hud/RevealTurnPanel';
+import { VotePanel } from '@/components/Hud/VotePanel';
 import { ASSETS, hasCharacterCard } from '@/config/assets';
 import type { HudChatLine, HudPlayerSlot } from '@/data/mockHud';
 import type { PlayerHandCard } from '@/types/card';
@@ -29,6 +31,12 @@ interface GameChatPanelProps {
   gatheredAtTable?: boolean;
   handCards?: PlayerHandCard[];
   onRevealCard?: (cardId: string) => void;
+  isVotingMode?: boolean;
+  hasVoted?: boolean;
+  onVoteToBrig?: (targetCharacterId: string) => void;
+  mockMode?: boolean;
+  onMockStartVoting?: () => void;
+  forceVoting?: boolean;
 }
 
 function PlayerAvatar({
@@ -127,6 +135,7 @@ function PlayerSidebar({
   inspectCharacterId,
   rosterPlayers,
   onInspect,
+  forceVoting = false,
 }: {
   players: HudPlayerSlot[];
   revealPlayer?: HudPlayerSlot | null;
@@ -136,18 +145,20 @@ function PlayerSidebar({
   inspectCharacterId?: string | null;
   rosterPlayers?: Player[];
   onInspect: (characterId: string) => void;
+  forceVoting?: boolean;
 }) {
   const handleInspect = (characterId: string) => {
     onInspect(inspectCharacterId === characterId ? '' : characterId);
   };
 
   return (
-    <aside className="flex w-[min(240px,28vw)] shrink-0 flex-col overflow-hidden rounded-3xl bg-[#2C2C2C] sm:w-[260px]">
+    <aside className={`flex w-[min(240px,28vw)] shrink-0 flex-col ${CHAT_PANEL_SURFACE_CLASS} sm:w-[260px]`}>
       <GameProcessPanel
         phase={gamePhase}
         revealPlayer={revealPlayer}
         isMyRevealTurn={isMyRevealTurn}
         gatheredAtTable={gatheredAtTable}
+        forceVoting={forceVoting}
       />
 
       <AnimatePresence mode="wait">
@@ -185,6 +196,16 @@ function PlayerSidebar({
   );
 }
 
+function isOwnMessage(msg: HudChatLine, myProfile?: MyProfile | null): boolean {
+  if (!myProfile) return false;
+  const sender = msg.sender.toLowerCase();
+  return (
+    sender === myProfile.name.toLowerCase() ||
+    sender === myProfile.id.toLowerCase() ||
+    sender === 'вы'
+  );
+}
+
 function MessageBubble({
   msg,
   selfId,
@@ -196,20 +217,45 @@ function MessageBubble({
   rosterPlayers?: Player[];
   myProfile?: MyProfile | null;
 }) {
+  const own = isOwnMessage(msg, myProfile);
+
+  if (own) {
+    return (
+      <div className="flex justify-end gap-3">
+        <div className="max-w-[75%] rounded-2xl rounded-br-md bg-white px-4 py-2.5 shadow-sm">
+          <p className="text-sm leading-relaxed text-neutral-900">{msg.text}</p>
+          {msg.timestamp && (
+            <p className="mt-1.5 text-right text-xs text-neutral-400">{msg.timestamp}</p>
+          )}
+        </div>
+        <ChatAvatar
+          sender={msg.sender}
+          selfId={selfId}
+          rosterPlayers={rosterPlayers}
+          myProfile={myProfile}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex gap-3">
+    <div className="flex items-start justify-start gap-3">
       <ChatAvatar
         sender={msg.sender}
         selfId={selfId}
         rosterPlayers={rosterPlayers}
         myProfile={myProfile}
       />
-      <div className="min-w-0 flex-1 rounded-2xl bg-white px-4 py-3 shadow-sm">
-        <p className="text-sm font-semibold capitalize text-neutral-900">{msg.sender}</p>
-        <p className="mt-1 text-sm leading-relaxed text-neutral-800">{msg.text}</p>
-        {msg.timestamp && (
-          <p className="mt-2 text-right text-xs text-neutral-400">{msg.timestamp}</p>
-        )}
+      <div className="relative min-w-0 max-w-[75%]">
+        <p className="mb-1 pl-1 text-sm font-semibold capitalize leading-none text-white">
+          {msg.sender}
+        </p>
+        <div className="relative rounded-2xl rounded-bl-md bg-white px-4 py-2.5 shadow-sm">
+          <p className="text-sm leading-relaxed text-neutral-900">{msg.text}</p>
+          {msg.timestamp && (
+            <p className="mt-1.5 text-right text-xs text-neutral-400">{msg.timestamp}</p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -282,6 +328,12 @@ export function GameChatPanel({
   gatheredAtTable = true,
   handCards = [],
   onRevealCard,
+  isVotingMode = false,
+  hasVoted = false,
+  onVoteToBrig,
+  mockMode = false,
+  onMockStartVoting,
+  forceVoting = false,
 }: GameChatPanelProps) {
   const [draft, setDraft] = useState('');
   const [inspectCharacterId, setInspectCharacterId] = useState<string | null>(null);
@@ -310,7 +362,7 @@ export function GameChatPanel({
 
   return (
     <div
-      className={`pointer-events-auto absolute bottom-4 left-4 right-20 flex ${topOffsetClass} min-w-0 gap-4`}
+      className={`pointer-events-auto absolute bottom-4 left-4 right-4 flex ${topOffsetClass} min-w-0 gap-4`}
     >
       <PlayerSidebar
         players={players}
@@ -321,9 +373,10 @@ export function GameChatPanel({
         inspectCharacterId={inspectCharacterId}
         rosterPlayers={rosterPlayers}
         onInspect={handleInspect}
+        forceVoting={forceVoting}
       />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl bg-[#2C2C2C] p-4 shadow-2xl sm:p-5">
+      <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${CHAT_PANEL_SURFACE_CLASS} p-4 shadow-2xl sm:p-5`}>
         <div
           ref={listRef}
           className="custom-scrollbar flex flex-1 flex-col gap-4 overflow-y-auto pr-1"
@@ -366,30 +419,51 @@ export function GameChatPanel({
           </p>
         )}
 
-        {isMyRevealTurn && onRevealCard && (
+        {isMyRevealTurn && onRevealCard && !isVotingMode && (
           <RevealTurnPanel cards={handCards} onRevealCard={onRevealCard} />
+        )}
+
+        {isVotingMode && rosterPlayers && onVoteToBrig && (
+          <VotePanel
+            players={rosterPlayers}
+            myProfile={myProfile}
+            hasVoted={hasVoted}
+            onConfirmBrig={onVoteToBrig}
+          />
+        )}
+
+        {mockMode && onMockStartVoting && !isVotingMode && (
+          <button
+            type="button"
+            onClick={onMockStartVoting}
+            className="mt-2 self-start rounded-full border border-red-400/40 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-red-300 transition hover:bg-red-500/10"
+          >
+            Тест · голосование
+          </button>
         )}
 
         <div
           className={`mt-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 shadow-inner ${
-            inputDisabled ? 'opacity-40' : ''
+            inputDisabled || isVotingMode ? 'opacity-40' : ''
           }`}
         >
           <input
             type="text"
             value={draft}
-            readOnly={inputDisabled}
-            onChange={(e) => !inputDisabled && setDraft(e.target.value)}
+            readOnly={inputDisabled || isVotingMode}
+            onChange={(e) => !inputDisabled && !isVotingMode && setDraft(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
             placeholder={
-              isMyRevealTurn
-                ? 'Сначала раскройте карту...'
-                : inputDisabled
-                  ? 'Ожидание действия...'
-                  : placeholder
+              isVotingMode
+                ? 'Сначала проголосуйте...'
+                : isMyRevealTurn
+                  ? 'Сначала раскройте карту...'
+                  : inputDisabled
+                    ? 'Ожидание действия...'
+                    : placeholder
             }
             className={`min-w-0 flex-1 bg-transparent py-2 text-sm text-neutral-900 focus:outline-none ${
-              inputDisabled
+              inputDisabled || isVotingMode
                 ? 'cursor-not-allowed placeholder:text-neutral-400/40'
                 : 'placeholder:text-neutral-400'
             }`}
@@ -397,7 +471,7 @@ export function GameChatPanel({
           <button
             type="button"
             onClick={submit}
-            disabled={inputDisabled}
+            disabled={inputDisabled || isVotingMode}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-black text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed"
             aria-label="Отправить"
           >

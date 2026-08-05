@@ -1,29 +1,21 @@
-import {
-  FileText,
-  Radio,
-  Shield,
-  SlidersHorizontal,
-  Wifi,
-  WifiOff,
-} from 'lucide-react';
+import { Wifi, WifiOff } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { ActionBar } from '@/components/ActionBar';
-import { ChatBox } from '@/components/ChatBox';
 import { BottomHand } from '@/components/Hand';
+import { BrigGrid } from '@/components/Brig/BrigGrid';
+import { ChatToastStack } from '@/components/Chat/ChatToastStack';
+import { formatPhaseLabel } from '@/components/Hud/GameProcessPanel';
 import { GameHud } from '@/components/Hud';
-import { HudFab, PanelOverlay } from '@/components/PanelOverlay';
 import { PrivateChatOverlay } from '@/components/PrivateChat';
 import { RoundTable } from '@/components/RoundTable';
 import { MOCK_PLAYER_HANDS } from '@/data/mockPlayerHands';
 import { MOCK_HAND_CARDS } from '@/data/mockHand';
-import { genderLabel } from '@/data/characters';
+import { useGeneralChatEffects } from '@/hooks/useGeneralChatEffects';
 import { cardRevealLabel } from '@/utils/cardLabel';
+import { usePrivateChatStore } from '@/store/privateChatStore';
 import { useGameStore } from '@/store/gameStore';
 import type { PlayerHandCard } from '@/types/card';
 import type { ChatMessage, GamePhase, MyProfile, Player, TypingIndicator } from '@/types/game';
-
-type OpenPanel = 'chat' | 'dossier' | 'actions' | null;
 
 interface GameSceneProps {
   gameState: GamePhase;
@@ -40,10 +32,6 @@ interface GameSceneProps {
   selectedPlayerId: string | null;
   onSelectPlayer: (id: string) => void;
   onSendChat: (text: string) => void;
-  onPitch: (text: string) => void;
-  onVote: (targetId: string) => void;
-  onAdvancePhase?: () => void;
-  onMockPhase?: () => void;
 }
 
 export function GameScene({
@@ -61,17 +49,23 @@ export function GameScene({
   selectedPlayerId,
   onSelectPlayer,
   onSendChat,
-  onPitch,
-  onVote,
-  onAdvancePhase,
-  onMockPhase,
 }: GameSceneProps) {
-  const [openPanel, setOpenPanel] = useState<OpenPanel>(null);
   const [handCards, setHandCards] = useState<PlayerHandCard[]>(MOCK_HAND_CARDS);
   const [isMyTurnToReveal, setIsMyTurnToReveal] = useState(false);
   const recordCardReveal = useGameStore((s) => s.recordCardReveal);
+  const brigCharacterIds = useGameStore((s) => s.brigCharacterIds);
+  const votes = useGameStore((s) => s.votes);
+  const castVoteToBrig = useGameStore((s) => s.castVoteToBrig);
   const [privateChatPlayerId, setPrivateChatPlayerId] = useState<string | null>(null);
   const wasGatheredRef = useRef(false);
+  const mockPrivatePingRef = useRef(false);
+
+  useGeneralChatEffects({
+    chat,
+    myProfile,
+    gatheredAtTable,
+    gameState,
+  });
 
   const privateChatPlayer =
     players.find((p) => p.id === privateChatPlayerId) ?? null;
@@ -93,14 +87,64 @@ export function GameScene({
     }
   }, [gatheredAtTable]);
 
-  const toggle = (panel: OpenPanel) => {
-    setOpenPanel((cur) => (cur === panel ? null : panel));
-  };
-
   const handleGatherAtTable = useCallback(() => {
+    setPrivateChatPlayerId(null);
+    usePrivateChatStore.getState().setActivePartner(null);
     onGatherAtTable();
     setIsMyTurnToReveal(true);
   }, [onGatherAtTable]);
+
+  const selfPlayerId = clientId ?? myProfile?.id;
+
+  /** Кулуары: всегда в лобби; за столом — только в фазе RECESS */
+  const handleOpenPrivateChat = useCallback(
+    (playerId: string) => {
+      if (playerId === selfPlayerId) return;
+      const target = players.find((p) => p.id === playerId);
+      if (!target?.is_alive) return;
+
+      if (!gatheredAtTable) {
+        usePrivateChatStore.getState().setActivePartner(playerId);
+        setPrivateChatPlayerId(playerId);
+        return;
+      }
+      if (gameState === 'RECESS') {
+        usePrivateChatStore.getState().setActivePartner(playerId);
+        setPrivateChatPlayerId(playerId);
+      }
+    },
+    [gatheredAtTable, gameState, players, selfPlayerId],
+  );
+
+  useEffect(() => {
+    if (gatheredAtTable && gameState !== 'RECESS') {
+      setPrivateChatPlayerId(null);
+      usePrivateChatStore.getState().setActivePartner(null);
+    }
+  }, [gatheredAtTable, gameState]);
+
+  const privateChatAtSeats = gatheredAtTable && gameState === 'RECESS';
+
+  useEffect(() => {
+    if (!mockMode || mockPrivatePingRef.current) return;
+
+    const selfId = clientId ?? myProfile?.id;
+    const partner = players.find((p) => p.id !== selfId && p.is_alive);
+    if (!partner) return;
+
+    mockPrivatePingRef.current = true;
+    const timer = window.setTimeout(() => {
+      const store = usePrivateChatStore.getState();
+      store.ensureThread(partner.id, partner.name);
+      store.receiveMessage(
+        partner.id,
+        partner.name,
+        'Есть минутка? Нужно кое-что обсудить в кулуарах.',
+      );
+    }, 5000);
+
+    return () => window.clearTimeout(timer);
+  }, [mockMode, players, clientId, myProfile?.id]);
 
   const handleRevealCard = useCallback(
     (cardId: string) => {
@@ -129,7 +173,8 @@ export function GameScene({
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-black text-bunker-text">
-      {/* Локация на весь экран */}
+      <ChatToastStack onOpenPrivateChat={handleOpenPrivateChat} />
+
       <RoundTable
         players={players}
         gatheredAtTable={gatheredAtTable}
@@ -137,26 +182,43 @@ export function GameScene({
         selfId={clientId ?? myProfile?.id}
         selectedPlayerId={selectedPlayerId}
         onSelectPlayer={onSelectPlayer}
-        onOpenPrivateChat={setPrivateChatPlayerId}
+        onOpenPrivateChat={handleOpenPrivateChat}
+        privateChatAtSeats={privateChatAtSeats}
       />
+
+      {gatheredAtTable && (
+        <BrigGrid brigCharacterIds={brigCharacterIds} players={players} />
+      )}
 
       <PrivateChatOverlay
         player={privateChatPlayer}
-        onClose={() => setPrivateChatPlayerId(null)}
+        myProfile={myProfile}
+        onClose={() => {
+          setPrivateChatPlayerId(null);
+          usePrivateChatStore.getState().setActivePartner(null);
+        }}
       />
 
-      {/* Лёгкий scanline */}
       <div className="pointer-events-none absolute inset-0 z-[35] bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.08)_50%)] bg-[length:100%_4px] opacity-25" />
 
-      {/* Мини-HUD: фаза + статус */}
       <div className="absolute left-4 top-4 z-[36] flex flex-wrap items-center gap-2">
         {!gatheredAtTable && (
+          <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
+            Нажмите на персонажа — кулуары
+          </span>
+        )}
+        {!gatheredAtTable && (
           <span className="rounded-full border border-bunker-amber/60 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-amber backdrop-blur-md">
-            Нажмите на стол
+            Нажмите на стол — общий чат
+          </span>
+        )}
+        {gatheredAtTable && gameState === 'RECESS' && (
+          <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
+            Нажмите на игрока — кулуары
           </span>
         )}
         <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-bunker-neon backdrop-blur-md">
-          {gameState}
+          {formatPhaseLabel(gameState)}
         </span>
         <span className="flex items-center gap-1 rounded-full border border-bunker-border/70 bg-black/45 px-2.5 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
           {connected ? (
@@ -182,7 +244,7 @@ export function GameScene({
       )}
 
       <GameHud
-        visible={gatheredAtTable}
+        visible={gatheredAtTable && gameState !== 'RECESS'}
         chat={chat}
         players={players}
         myProfile={myProfile}
@@ -194,96 +256,11 @@ export function GameScene({
         gatheredAtTable={gatheredAtTable}
         typing={typing.map((t) => t.sender)}
         onSendMessage={onSendChat}
+        onVoteToBrig={castVoteToBrig}
+        votes={votes}
+        clientId={clientId}
+        mockMode={mockMode}
       />
-
-      {/* Кнопки HUD — открывают панели */}
-      <div className="absolute bottom-6 right-4 z-[36] flex flex-col gap-3 sm:bottom-8 sm:right-6">
-        <HudFab
-          label="Канал связи"
-          icon={<Radio className="h-5 w-5" />}
-          onClick={() => toggle('chat')}
-          active={openPanel === 'chat'}
-          badge={openPanel === 'chat' ? undefined : chat.length}
-        />
-        <HudFab
-          label="Досье"
-          icon={<FileText className="h-5 w-5" />}
-          onClick={() => toggle('dossier')}
-          active={openPanel === 'dossier'}
-        />
-        <HudFab
-          label="Действия"
-          icon={<SlidersHorizontal className="h-5 w-5" />}
-          onClick={() => toggle('actions')}
-          active={openPanel === 'actions'}
-        />
-      </div>
-
-      {/* Панель: чат */}
-      <PanelOverlay
-        open={openPanel === 'chat'}
-        title="Канал связи"
-        onClose={() => setOpenPanel(null)}
-      >
-        <ChatBox messages={chat} typing={typing} className="h-full min-h-[50vh] border-0 shadow-none" />
-      </PanelOverlay>
-
-      {/* Панель: досье */}
-      <PanelOverlay
-        open={openPanel === 'dossier'}
-        title="Досье"
-        onClose={() => setOpenPanel(null)}
-      >
-        {myProfile ? (
-          <div className="space-y-4 font-mono text-sm">
-            <div className="rounded-xl border border-bunker-border bg-bunker-bg/60 p-4">
-              <div className="mb-2 flex items-center gap-2 text-bunker-neon">
-                <Shield className="h-4 w-4" />
-                <span className="font-display text-base font-semibold text-bunker-text">
-                  {myProfile.name}
-                </span>
-              </div>
-              <ul className="space-y-1 text-bunker-text">
-                <li>Пол: {genderLabel(myProfile.gender)}</li>
-                <li className="text-bunker-neon">Возраст: {myProfile.age} (только вы)</li>
-                <li className="text-bunker-muted">{myProfile.role}</li>
-              </ul>
-            </div>
-            <div className="rounded-xl border border-bunker-border bg-bunker-bg/60 p-4">
-              <p className="mb-2 text-bunker-muted">Инвентарь</p>
-              <ul className="space-y-0.5">
-                {myProfile.inventory.length > 0 ? (
-                  myProfile.inventory.map((item) => <li key={item}>• {item}</li>)
-                ) : (
-                  <li className="text-bunker-muted">Пусто</li>
-                )}
-              </ul>
-            </div>
-          </div>
-        ) : (
-          <p className="font-mono text-sm text-bunker-muted">Нет данных профиля</p>
-        )}
-      </PanelOverlay>
-
-      {/* Панель: действия */}
-      <PanelOverlay
-        open={openPanel === 'actions'}
-        title="Действия"
-        onClose={() => setOpenPanel(null)}
-        side="bottom"
-      >
-        <ActionBar
-          gameState={gameState}
-          connected={connected}
-          selectedPlayerId={selectedPlayerId}
-          onSendChat={onSendChat}
-          onPitch={onPitch}
-          onVote={onVote}
-          onAdvancePhase={onAdvancePhase}
-          mockMode={mockMode}
-          onMockPhase={onMockPhase}
-        />
-      </PanelOverlay>
     </div>
   );
 }

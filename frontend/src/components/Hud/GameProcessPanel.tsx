@@ -1,9 +1,16 @@
 import { motion } from 'framer-motion';
 import { Clock, Vote } from 'lucide-react';
-import { useEffect, useState } from 'react';
 
 import { ASSETS, hasCharacterCard } from '@/config/assets';
+import {
+  GAME_PHASE_CONFIG,
+  getPhaseCountdownConfig,
+  getPhaseMeta,
+  isInVoteWindow,
+  isRevealPhase,
+} from '@/data/gamePhaseConfig';
 import type { HudPlayerSlot } from '@/data/mockHud';
+import { usePhaseCountdown } from '@/hooks/usePhaseCountdown';
 import type { GamePhase } from '@/types/game';
 
 const PINSTRIPE_BG = `#F5E6A8 repeating-linear-gradient(
@@ -14,15 +21,6 @@ const PINSTRIPE_BG = `#F5E6A8 repeating-linear-gradient(
   rgba(0,0,0,0.035) 4px
 )`;
 
-const PHASE_DURATION: Partial<Record<GamePhase, number>> = {
-  PITCH: 180,
-  CONFLICT: 120,
-  VOTE: 30,
-  RESOLVE: 20,
-};
-
-const REVEAL_TURN_SECONDS = 45;
-
 function formatCountdown(totalSeconds: number): string {
   const clamped = Math.max(0, totalSeconds);
   const minutes = Math.floor(clamped / 60);
@@ -30,30 +28,10 @@ function formatCountdown(totalSeconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-function useCountdown(initialSeconds: number, resetKey: string) {
-  const [remaining, setRemaining] = useState(initialSeconds);
-
-  useEffect(() => {
-    setRemaining(initialSeconds);
-  }, [initialSeconds, resetKey]);
-
-  useEffect(() => {
-    if (remaining <= 0) return;
-    const id = window.setInterval(() => {
-      setRemaining((prev) => Math.max(0, prev - 1));
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [remaining, resetKey]);
-
-  return remaining;
-}
-
 function ProcessPortrait({ characterId, name }: { characterId: string; name: string }) {
-  const [src, setSrc] = useState(() =>
-    hasCharacterCard(characterId)
-      ? ASSETS.cards.character(characterId)
-      : ASSETS.characters.chibi(characterId),
-  );
+  const src = hasCharacterCard(characterId)
+    ? ASSETS.cards.character(characterId)
+    : ASSETS.characters.chibi(characterId);
 
   return (
     <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full border-2 border-neutral-900/12 bg-neutral-700 shadow-[0_2px_8px_rgba(0,0,0,0.12)]">
@@ -62,7 +40,6 @@ function ProcessPortrait({ characterId, name }: { characterId: string; name: str
         alt={name}
         className="h-full w-full object-cover object-top"
         draggable={false}
-        onError={() => setSrc(ASSETS.characters.chibi(characterId))}
       />
     </div>
   );
@@ -76,7 +53,15 @@ function PhaseIcon() {
   );
 }
 
-function CountdownBadge({ seconds, urgentBelow = 10 }: { seconds: number; urgentBelow?: number }) {
+function CountdownBadge({
+  seconds,
+  urgentBelow = 10,
+  label,
+}: {
+  seconds: number;
+  urgentBelow?: number;
+  label?: string;
+}) {
   const urgent = seconds <= urgentBelow;
 
   return (
@@ -90,6 +75,11 @@ function CountdownBadge({ seconds, urgentBelow = 10 }: { seconds: number; urgent
       transition={urgent ? { duration: 1, repeat: Infinity } : undefined}
     >
       <Clock className={`h-3 w-3 shrink-0 ${urgent ? 'text-red-500/80' : 'text-neutral-600/70'}`} />
+      {label && (
+        <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+          {label}
+        </span>
+      )}
       <span className="font-semibold tracking-wide">{formatCountdown(seconds)}</span>
     </motion.div>
   );
@@ -100,6 +90,7 @@ export interface GameProcessPanelProps {
   revealPlayer?: HudPlayerSlot | null;
   isMyRevealTurn?: boolean;
   gatheredAtTable?: boolean;
+  forceVoting?: boolean;
 }
 
 export function GameProcessPanel({
@@ -107,59 +98,63 @@ export function GameProcessPanel({
   revealPlayer,
   isMyRevealTurn = false,
   gatheredAtTable = true,
+  forceVoting = false,
 }: GameProcessPanelProps) {
+  const meta = getPhaseMeta(phase);
+  const revealCharacterId =
+    revealPlayer && isRevealPhase(phase) ? revealPlayer.id : null;
+
+  const { resetKey, initialSeconds } = getPhaseCountdownConfig(
+    phase,
+    gatheredAtTable,
+    revealCharacterId,
+  );
+
+  const remaining = usePhaseCountdown(initialSeconds, resetKey);
+  const voting = forceVoting || isInVoteWindow(phase, remaining);
+
   const showReveal =
-    gatheredAtTable &&
-    revealPlayer != null &&
-    (phase === 'PITCH' || phase === 'CONFLICT' || phase === 'INIT');
-
-  const resetKey = showReveal
-    ? `reveal-${revealPlayer?.id}`
-    : `phase-${phase}`;
-
-  const initialSeconds = showReveal
-    ? REVEAL_TURN_SECONDS
-    : PHASE_DURATION[phase] ?? 0;
-
-  const remaining = useCountdown(initialSeconds, resetKey);
+    gatheredAtTable && revealPlayer != null && isRevealPhase(phase) && !voting;
 
   let title: string;
   let subtitle: string;
   let showTimer = initialSeconds > 0;
+  let timerLabel: string | undefined;
+  let urgentBelow = 10;
 
   if (!gatheredAtTable) {
-    title = 'Сбор у аванпоста';
-    subtitle = 'Ожидание за столом';
-    showTimer = false;
+    if (phase === 'INIT') {
+      title = meta.title;
+      subtitle = meta.subtitle;
+      showTimer = meta.durationSeconds > 0;
+      timerLabel = 'Фаза 0';
+    } else {
+      title = 'Сбор у аванпоста';
+      subtitle = 'Ожидание за столом';
+      showTimer = false;
+    }
   } else if (showReveal && revealPlayer) {
     title = revealPlayer.name;
     subtitle = isMyRevealTurn ? 'Ваша очередь · откройте карту' : 'Очередь открывать карту';
+    timerLabel = `Раунд ${meta.round ?? '—'}`;
+  } else if (voting) {
+    title = 'Голосование';
+    subtitle = 'Выберите, кого отправить в Карцер';
+    timerLabel = 'Голосование';
+    urgentBelow = 15;
   } else {
-    switch (phase) {
-      case 'VOTE':
-        title = 'Голосование';
-        subtitle = remaining > 0 ? 'Осталось времени' : 'Голосование завершено';
-        break;
-      case 'PITCH':
-        title = 'Обсуждение';
-        subtitle = 'Фаза питчинга';
-        break;
-      case 'CONFLICT':
-        title = 'Конфликт';
-        subtitle = 'Спорные моменты';
-        break;
-      case 'RESOLVE':
-        title = 'Итоги';
-        subtitle = 'Подведение результатов';
-        break;
-      default:
-        title = 'Ожидание';
-        subtitle = 'Игра готовится к старту';
-        showTimer = false;
+    title = meta.title;
+    subtitle = meta.subtitle;
+    if (meta.round != null && meta.round > 0) {
+      timerLabel = `Раунд ${meta.round}`;
+    } else if (phase === 'INIT') {
+      timerLabel = 'Фаза 0';
+    } else if (phase === 'RESOLVE') {
+      timerLabel = 'Эпилог';
     }
   }
 
-  const hasLeadingIcon = Boolean((showReveal && revealPlayer) || phase === 'VOTE');
+  const hasLeadingIcon = Boolean((showReveal && revealPlayer) || voting || phase === 'VOTE');
 
   return (
     <div
@@ -169,7 +164,7 @@ export function GameProcessPanel({
       <div className="flex items-start gap-2.5">
         {showReveal && revealPlayer ? (
           <ProcessPortrait characterId={revealPlayer.id} name={revealPlayer.name} />
-        ) : phase === 'VOTE' ? (
+        ) : voting || phase === 'VOTE' ? (
           <PhaseIcon />
         ) : null}
 
@@ -183,9 +178,23 @@ export function GameProcessPanel({
 
       {showTimer && remaining > 0 && (
         <div className={`mt-2.5 ${hasLeadingIcon ? 'pl-[3.25rem]' : ''}`}>
-          <CountdownBadge seconds={remaining} />
+          <CountdownBadge seconds={remaining} urgentBelow={urgentBelow} label={timerLabel} />
         </div>
+      )}
+
+      {showTimer && remaining === 0 && (
+        <p className={`mt-2.5 text-[11px] text-neutral-500 ${hasLeadingIcon ? 'pl-[3.25rem]' : ''}`}>
+          Время фазы истекло
+        </p>
       )}
     </div>
   );
+}
+
+export function formatPhaseLabel(phase: GamePhase): string {
+  const meta = GAME_PHASE_CONFIG[phase];
+  if (meta.round != null && meta.round > 0) {
+    return `R${meta.round} · ${meta.title}`;
+  }
+  return meta.title;
 }

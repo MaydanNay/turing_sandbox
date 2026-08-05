@@ -8,6 +8,7 @@ export const ASSETS = {
   locations: {
     outpost: '/assets/locations/локация.png',
     outpostNight: '/assets/locations/outpost-night.png',
+    menu: '/assets/locations/menu.png',
   },
   table: {
     round: '/assets/table/table.png',
@@ -46,7 +47,16 @@ export const ASSETS = {
 } as const;
 
 /** Персонажи с портретом в `characters/chat/{id}_chat.png` */
-export const CHAT_PORTRAIT_IDS = ['cole', 'martha', 'chester', 'roxy'] as const;
+export const CHAT_PORTRAIT_IDS = [
+  'vance',
+  'cole',
+  'martha',
+  'penny',
+  'gwen',
+  'logan',
+  'chester',
+  'roxy',
+] as const;
 
 export function hasChatPortrait(characterId: string): boolean {
   return (CHAT_PORTRAIT_IDS as readonly string[]).includes(characterId);

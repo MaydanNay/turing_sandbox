@@ -18,7 +18,7 @@ export function CharacterPortraitLayer({
   const accent = getCharacterChatAccent(characterId);
 
   return (
-    <div className="pointer-events-none absolute inset-y-0 left-0 z-[2] flex items-end justify-start">
+    <div className="pointer-events-none absolute inset-y-0 left-0 z-[1] flex items-end justify-start">
       <div
         aria-hidden
         className="absolute left-0 top-0 h-[min(48vh,480px)] w-[min(42vw,460px)]"

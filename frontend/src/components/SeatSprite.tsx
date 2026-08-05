@@ -1,7 +1,10 @@
 import { motion } from 'framer-motion';
 
+import { playUiSound } from '@/audio/uiSounds';
+import { PrivateMessageBadge } from '@/components/PrivateChat/PrivateMessageBadge';
 import { seatSprite } from '@/config/assets';
 import { genderLabel } from '@/data/characters';
+import { usePrivateChatStore } from '@/store/privateChatStore';
 import type { Player } from '@/types/game';
 import { SEAT_BASE_WIDTH, type SeatLayout } from '@/utils/seatPositions';
 
@@ -32,11 +35,13 @@ export function SeatSprite({
   selected = false,
   onSelect,
 }: SeatSpriteProps) {
+  const unreadCount = usePrivateChatStore((s) => s.unread[player.id] ?? 0);
   const src = seatSprite(seatNumber, player.characterId, player.is_alive);
   const suspicion = player.suspicion_score;
   const criticalSuspicion = suspicion >= 75 && player.is_alive;
   const highSuspicion = suspicion >= 50 && player.is_alive;
   const width = BASE_WIDTH_PERCENT * layout.scale;
+  const displayZIndex = unreadCount > 0 ? zIndex + 25 : zIndex;
 
   return (
     <motion.button
@@ -46,7 +51,7 @@ export function SeatSprite({
         left: `${layout.x}%`,
         top: `${layout.y}%`,
         width: `${width}%`,
-        zIndex,
+        zIndex: displayZIndex,
         ...SEAT_ANCHOR_STYLE,
       }}
       initial={{ opacity: 0 }}
@@ -55,7 +60,11 @@ export function SeatSprite({
         filter: player.is_alive ? 'grayscale(0)' : 'grayscale(0.85) brightness(0.65)',
       }}
       whileHover={player.is_alive ? { opacity: 0.95 } : undefined}
-      onClick={() => onSelect?.(player.id)}
+      onClick={() => {
+        if (!player.is_alive) return;
+        playUiSound('character');
+        onSelect?.(player.id);
+      }}
       aria-label={`${player.name}, ${genderLabel(player.gender)}`}
     >
       <motion.div
@@ -73,12 +82,17 @@ export function SeatSprite({
             : { duration: 1.5, repeat: Infinity }
         }
       >
-        <img
-          src={src}
-          alt=""
-          className="pointer-events-none h-auto w-full select-none"
-          draggable={false}
-        />
+        <div className="relative w-full">
+          {!isSelf && player.is_alive && (
+            <PrivateMessageBadge count={unreadCount} variant="seated" />
+          )}
+          <img
+            src={src}
+            alt=""
+            className="pointer-events-none block h-auto w-full select-none"
+            draggable={false}
+          />
+        </div>
 
         <div className="absolute bottom-0 left-1/2 w-[130%] -translate-x-1/2 translate-y-full pt-0.5 text-center">
           <span className="inline-block whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-display text-[9px] font-semibold text-bunker-text backdrop-blur-sm sm:text-[10px]">

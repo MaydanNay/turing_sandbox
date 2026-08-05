@@ -1,6 +1,7 @@
 import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
 import { useState } from 'react';
 
+import { playCardHoverSoundEffect, playUiSound } from '@/audio/uiSounds';
 import { InspectCardOverlay } from '@/components/Hand/InspectCardOverlay';
 import { CardFrontFace } from '@/components/Hand/CardFaces';
 import { getRevealedCardsForPlayer } from '@/data/mockPlayerHands';
@@ -35,7 +36,11 @@ function RevealedCardTab({
     <motion.button
       type="button"
       layoutId={card.id}
-      onClick={() => onOpen(card)}
+      onMouseEnter={() => playCardHoverSoundEffect()}
+      onClick={() => {
+        playUiSound('card');
+        onOpen(card);
+      }}
       className={`pointer-events-auto relative shrink-0 overflow-hidden rounded-t-xl bg-black shadow-lg ring-2 ring-inset transition hover:-translate-y-0.5 hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${accent}`}
       style={{ width: TAB_W, height: TAB_H }}
       title={cardRevealLabel(card)}

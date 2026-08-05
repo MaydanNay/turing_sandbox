@@ -7,6 +7,7 @@ import {
   type PanInfo,
 } from 'framer-motion';
 import { useCallback, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { PlayerHandCard } from '@/types/card';
 
@@ -16,14 +17,30 @@ const TILT_RANGE = 20;
 const AUTO_ROTATE_SPEED = 0.3;
 const PAN_SENSITIVITY = 0.5;
 
+export interface InspectCardAction {
+  label: string;
+  onClick: () => void;
+  variant?: 'primary' | 'secondary';
+}
+
 interface InspectCardOverlayProps {
   card: PlayerHandCard;
   onClose: () => void;
   /** z-index слоя поверх приватного чата и HUD */
   zClass?: string;
+  /** Кнопки под картой (например, подтверждение раскрытия) */
+  actions?: InspectCardAction[];
+  /** Начать с лицевой стороны, даже если карта ещё не раскрыта */
+  startOnFront?: boolean;
 }
 
-export function InspectCardOverlay({ card, onClose, zClass = 'z-50' }: InspectCardOverlayProps) {
+export function InspectCardOverlay({
+  card,
+  onClose,
+  zClass = 'z-50',
+  actions,
+  startOnFront = false,
+}: InspectCardOverlayProps) {
   const cardSurfaceRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
 
@@ -31,7 +48,7 @@ export function InspectCardOverlay({ card, onClose, zClass = 'z-50' }: InspectCa
   const [isHovering, setIsHovering] = useState(false);
 
   // Базовое непрерывное вращение (накопительное, 360°+)
-  const baseRotateY = useMotionValue(card.isRevealed ? 0 : 180);
+  const baseRotateY = useMotionValue(startOnFront || card.isRevealed ? 0 : 180);
   // Наклон от курсора — spring для плавного tilt и сброса
   const tiltX = useSpring(0, { damping: 20, stiffness: 100 });
   const tiltY = useSpring(0, { damping: 20, stiffness: 100 });
@@ -100,14 +117,14 @@ export function InspectCardOverlay({ card, onClose, zClass = 'z-50' }: InspectCa
     setIsDragging(false);
   }, []);
 
-  return (
+  return createPortal(
     <motion.div
-      className={`fixed inset-0 ${zClass} flex items-center justify-center bg-black/50 backdrop-blur-sm`}
+      className={`fixed inset-0 ${zClass} flex flex-col items-center justify-center bg-black/50 backdrop-blur-sm px-4`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.25 }}
-      onClick={onClose}
+      onClick={actions ? undefined : onClose}
       role="presentation"
     >
       {/* layoutId — только полёт из руки; без animate, чтобы не конфликтовать */}
@@ -116,6 +133,7 @@ export function InspectCardOverlay({ card, onClose, zClass = 'z-50' }: InspectCa
         className="pointer-events-auto relative h-[360px] w-[240px]"
         style={{ perspective: 1000 }}
         onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
         {/* Wrapper: «дыхание» по Y */}
         <motion.div
@@ -153,6 +171,26 @@ export function InspectCardOverlay({ card, onClose, zClass = 'z-50' }: InspectCa
           </motion.div>
         </motion.div>
       </motion.div>
-    </motion.div>
+
+      {actions && actions.length > 0 && (
+        <div className="pointer-events-auto mt-8 flex flex-wrap items-center justify-center gap-3">
+          {actions.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              onClick={action.onClick}
+              className={
+                action.variant === 'primary'
+                  ? 'rounded-full bg-white px-6 py-2.5 text-sm font-semibold text-neutral-900 transition hover:bg-neutral-100'
+                  : 'rounded-full border border-white/30 bg-white/10 px-6 py-2.5 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-white/20'
+              }
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </motion.div>,
+    document.body,
   );
 }

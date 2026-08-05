@@ -2,7 +2,18 @@ import { Megaphone, MessageSquare, Send, Vote } from 'lucide-react';
 import { useState } from 'react';
 
 import { mapFrontendPhase } from '@/config/env';
+import { MATCH_PHASE_ORDER } from '@/data/gamePhaseConfig';
+import { getPhaseMeta } from '@/data/gamePhaseConfig';
 import type { GamePhase } from '@/types/game';
+
+function canSpeak(phase: GamePhase): boolean {
+  const format = getPhaseMeta(phase).format;
+  return format === 'table';
+}
+
+function canVote(phase: GamePhase): boolean {
+  return phase === 'VOTE' || phase === 'CONFLICT' || phase === 'REVISION' || phase === 'TURING';
+}
 
 interface ActionBarProps {
   gameState: GamePhase;
@@ -14,14 +25,6 @@ interface ActionBarProps {
   onAdvancePhase?: () => void;
   mockMode?: boolean;
   onMockPhase?: () => void;
-}
-
-function canSpeak(phase: GamePhase): boolean {
-  return phase === 'PITCH' || phase === 'CONFLICT';
-}
-
-function canVote(phase: GamePhase): boolean {
-  return phase === 'VOTE';
 }
 
 export function ActionBar({
@@ -56,7 +59,7 @@ export function ActionBar({
     <div className="rounded-xl border border-bunker-border bg-bunker-panel/95 p-3 backdrop-blur">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="font-mono text-[10px] uppercase tracking-widest text-bunker-muted">
-          Фаза: <span className="text-bunker-neon">{gameState}</span>
+          Фаза: <span className="text-bunker-neon">{getPhaseMeta(gameState).title}</span>
         </span>
         {!connected && mockMode && (
           <span className="rounded bg-bunker-amber/20 px-2 py-0.5 font-mono text-[10px] text-bunker-amber">
@@ -125,7 +128,10 @@ export function ActionBar({
           </button>
         )}
 
-        {(gameState === 'CONFLICT' || gameState === 'PITCH') && (
+        {(gameState === 'CONFLICT' ||
+          gameState === 'PITCH' ||
+          gameState === 'REVISION' ||
+          gameState === 'TURING') && (
           <button
             type="button"
             disabled={disabled}
@@ -138,8 +144,8 @@ export function ActionBar({
         )}
 
         {connected && onAdvancePhase && (() => {
-          const order: GamePhase[] = ['INIT', 'PITCH', 'CONFLICT', 'VOTE', 'RESOLVE'];
-          const next = order[(order.indexOf(gameState) + 1) % order.length] ?? 'INIT';
+          const index = MATCH_PHASE_ORDER.indexOf(gameState);
+          const next = MATCH_PHASE_ORDER[(index + 1) % MATCH_PHASE_ORDER.length] ?? 'INIT';
           return (
           <button
             type="button"

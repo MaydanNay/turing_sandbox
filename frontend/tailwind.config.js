@@ -19,6 +19,8 @@ export default {
       fontFamily: {
         mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
         display: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
+        title: ['"Cinzel"', 'Georgia', 'serif'],
+        menu: ['"Cormorant Garamond"', 'Georgia', 'serif'],
       },
       boxShadow: {
         neon: '0 0 12px rgba(57, 255, 20, 0.35)',

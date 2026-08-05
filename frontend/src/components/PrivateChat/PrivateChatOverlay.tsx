@@ -1,45 +1,113 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowUp, Paperclip } from 'lucide-react';
+import { ArrowUp } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { CHAT_PANEL_SURFACE_CLASS } from '@/components/Hud/chatPanelSurface';
 import { CharacterPortraitLayer, buildPortraitSrc } from '@/components/PrivateChat/CharacterPortraitLayer';
 import { RevealedCardTabs, REVEALED_CARD_PEEK_PX } from '@/components/PrivateChat/RevealedCardTabs';
-import { ASSETS, hasChatPortrait } from '@/config/assets';
+import { ASSETS, hasCharacterCard, hasChatPortrait } from '@/config/assets';
 import { getRevealedCardsForPlayer } from '@/data/mockPlayerHands';
-import type { Player } from '@/types/game';
+import { usePrivateChatStore, type PrivateChatMessage } from '@/store/privateChatStore';
+import type { MyProfile, Player } from '@/types/game';
 
-interface PrivateMessage {
-  id: string;
-  from: 'me' | 'them';
-  text: string;
+const EMPTY_MESSAGES: PrivateChatMessage[] = [];
+
+function ChatAvatar({
+  characterId,
+  name,
+}: {
+  characterId: string;
+  name: string;
+}) {
+  const [src, setSrc] = useState(() =>
+    hasCharacterCard(characterId)
+      ? ASSETS.cards.character(characterId)
+      : ASSETS.characters.chibi(characterId),
+  );
+
+  return (
+    <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-neutral-700">
+      <img
+        src={src}
+        alt={name}
+        className="h-full w-full object-cover object-top"
+        draggable={false}
+        onError={() => setSrc(ASSETS.characters.chibi(characterId))}
+      />
+    </div>
+  );
 }
 
-function mockMessages(partnerName: string): PrivateMessage[] {
-  return [
-    { id: '1', from: 'them', text: `Привет. Это ${partnerName}. Нужно поговорить без лишних ушей.` },
-    { id: '2', from: 'me', text: 'Слушаю. Что ты знаешь о последнем инциденте?' },
-    { id: '3', from: 'them', text: 'Вентиляция в секторе C работала на обратной тяге. Это не случайность.' },
-    { id: '4', from: 'me', text: 'Ты уверен? Кто ещё мог это видеть?' },
-    { id: '5', from: 'them', text: 'Пока только я. Но логи терминала кто-то уже подчистил.' },
-    { id: '6', from: 'me', text: 'Хорошо. Держи это между нами до голосования.' },
-  ];
+function PrivateMessageBubble({
+  msg,
+  partner,
+  myProfile,
+}: {
+  msg: PrivateChatMessage;
+  partner: Player;
+  myProfile?: MyProfile | null;
+}) {
+  if (msg.from === 'me') {
+    const myName = myProfile?.name ?? 'Вы';
+    const myCharacterId = myProfile?.characterId ?? 'vance';
+
+    return (
+      <div className="flex justify-end gap-3">
+        <div className="max-w-[75%] rounded-2xl rounded-br-md bg-white px-4 py-2.5 shadow-sm">
+          <p className="text-sm leading-relaxed text-neutral-900">{msg.text}</p>
+          <p className="mt-1.5 text-right text-xs text-neutral-400">{msg.timestamp}</p>
+        </div>
+        <ChatAvatar characterId={myCharacterId} name={myName} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start justify-start gap-3">
+      <ChatAvatar characterId={partner.characterId} name={partner.name} />
+      <div className="relative min-w-0 max-w-[75%]">
+        <p className="mb-1 pl-1 text-sm font-semibold capitalize leading-none text-white">
+          {partner.name}
+        </p>
+        <div className="relative rounded-2xl rounded-bl-md bg-white px-4 py-2.5 shadow-sm">
+          <p className="text-sm leading-relaxed text-neutral-900">{msg.text}</p>
+          <p className="mt-1.5 text-right text-xs text-neutral-400">{msg.timestamp}</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 interface PrivateChatOverlayProps {
   player: Player | null;
+  myProfile?: MyProfile | null;
   onClose: () => void;
 }
 
-export function PrivateChatOverlay({ player, onClose }: PrivateChatOverlayProps) {
+export function PrivateChatOverlay({ player, myProfile, onClose }: PrivateChatOverlayProps) {
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<PrivateMessage[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
 
+  const ensureThread = usePrivateChatStore((s) => s.ensureThread);
+  const sendMessage = usePrivateChatStore((s) => s.sendMessage);
+  const setActivePartner = usePrivateChatStore((s) => s.setActivePartner);
+  const threadMessages = usePrivateChatStore((s) =>
+    player ? s.threads[player.id] : undefined,
+  );
+  const messages = threadMessages ?? EMPTY_MESSAGES;
+
   useEffect(() => {
-    if (!player) return;
-    setMessages(mockMessages(player.name));
+    if (!player) {
+      setActivePartner(null);
+      return;
+    }
+
+    ensureThread(player.id, player.name);
+    setActivePartner(player.id);
     setDraft('');
-  }, [player]);
+
+    return () => setActivePartner(null);
+  }, [player, ensureThread, setActivePartner]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -56,9 +124,10 @@ export function PrivateChatOverlay({ player, onClose }: PrivateChatOverlayProps)
   }, [player, onClose]);
 
   const submit = () => {
+    if (!player) return;
     const text = draft.trim();
     if (!text) return;
-    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, from: 'me', text }]);
+    sendMessage(player.id, player.name, text);
     setDraft('');
   };
 
@@ -71,7 +140,7 @@ export function PrivateChatOverlay({ player, onClose }: PrivateChatOverlayProps)
     <AnimatePresence>
       {player && (
         <motion.div
-          className="fixed inset-0 z-50 overflow-hidden bg-black/80 backdrop-blur-md"
+          className="fixed inset-0 z-50 overflow-hidden"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -80,81 +149,10 @@ export function PrivateChatOverlay({ player, onClose }: PrivateChatOverlayProps)
           aria-modal
           aria-label={`Приватный чат с ${player.name}`}
         >
-          {/* Кнопка закрытия — верхний правый угол */}
-          <button
-            type="button"
-            onClick={onClose}
-            className="absolute right-6 top-6 z-[3] rounded-md border-2 border-red-500/70 bg-red-950/40 px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-red-400 transition hover:bg-red-500/20 hover:text-red-300"
-          >
-            Закрыть чат
-          </button>
-
-          {/* Слой 1: чат — на всю ширину от left-6 до right-6 (как кнопка закрытия) */}
-          <div className="absolute inset-x-6 bottom-10 z-[1] h-[72vh]">
-            <div className="relative flex h-full w-full flex-col pl-[min(32vw,380px)] pr-6 -translate-x-1 lg:-translate-x-2">
-              <div className="relative flex min-h-0 w-full flex-1 flex-col">
-                {player && <RevealedCardTabs characterId={player.characterId} />}
-
-                {/* Окно чата — поверх карт, перекрывает их нижнюю часть */}
-                <div
-                  className="relative z-10 flex w-full min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-[#2C2C2C] p-6 shadow-2xl"
-                  style={{ marginTop: hasRevealedCards ? REVEALED_CARD_PEEK_PX : 0 }}
-                >
-                <p className="mb-4 font-display text-lg font-semibold text-white">
-                  Кулуары · {player.name}
-                </p>
-
-                <div
-                  ref={listRef}
-                  className="custom-scrollbar flex flex-1 flex-col gap-3 overflow-y-auto pr-1"
-                >
-                  {messages.map((msg) =>
-                    msg.from === 'me' ? (
-                      <div key={msg.id} className="flex justify-end">
-                        <div className="max-w-[75%] rounded-2xl rounded-br-md bg-white px-4 py-2.5 text-sm text-neutral-900 shadow-sm">
-                          {msg.text}
-                        </div>
-                      </div>
-                    ) : (
-                      <div key={msg.id} className="flex justify-start">
-                        <div className="max-w-[75%] rounded-2xl rounded-bl-md bg-[#3a3a3a] px-4 py-2.5 text-sm text-neutral-100 shadow-sm">
-                          {msg.text}
-                        </div>
-                      </div>
-                    ),
-                  )}
-                </div>
-
-                {/* Поле ввода */}
-                <div className="mt-4 flex items-center gap-3 rounded-2xl bg-white px-4 py-2 shadow-inner">
-                  <button
-                    type="button"
-                    className="text-neutral-400 transition hover:text-neutral-600"
-                    aria-label="Прикрепить файл"
-                  >
-                    <Paperclip className="h-5 w-5" />
-                  </button>
-                  <input
-                    type="text"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && submit()}
-                    placeholder="Отправить сообщение..."
-                    className="min-w-0 flex-1 bg-transparent py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={submit}
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-white transition hover:bg-neutral-800"
-                    aria-label="Отправить"
-                  >
-                    <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
-                  </button>
-                </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <div
+            className="pointer-events-none absolute inset-0 bg-black/10 backdrop-blur-[24px]"
+            aria-hidden
+          />
 
           <CharacterPortraitLayer
             characterId={player.characterId}
@@ -169,6 +167,64 @@ export function PrivateChatOverlay({ player, onClose }: PrivateChatOverlayProps)
               }
             }}
           />
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-4 top-4 z-[3] rounded-md border-2 border-red-500/70 bg-red-950/40 px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-red-400 transition hover:bg-red-500/20 hover:text-red-300 sm:right-6 sm:top-6"
+          >
+            Закрыть чат
+          </button>
+
+          <div className="absolute bottom-4 left-4 right-4 z-[2] h-[80vh]">
+            <div className="relative flex h-full w-full flex-col pl-[min(32vw,380px)]">
+              <div className="relative flex min-h-0 w-full flex-1 flex-col">
+                <RevealedCardTabs characterId={player.characterId} />
+
+                <div
+                  className={`relative z-10 flex w-full min-h-0 flex-1 flex-col ${CHAT_PANEL_SURFACE_CLASS} p-4 shadow-2xl sm:p-5`}
+                  style={{ marginTop: hasRevealedCards ? REVEALED_CARD_PEEK_PX : 0 }}
+                >
+                  <p className="mb-4 font-display text-lg font-semibold text-white">
+                    Кулуары · {player.name}
+                  </p>
+
+                  <div
+                    ref={listRef}
+                    className="custom-scrollbar flex flex-1 flex-col gap-4 overflow-y-auto pr-1"
+                  >
+                    {messages.map((msg) => (
+                      <PrivateMessageBubble
+                        key={msg.id}
+                        msg={msg}
+                        partner={player}
+                        myProfile={myProfile}
+                      />
+                    ))}
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 shadow-inner">
+                    <input
+                      type="text"
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && submit()}
+                      placeholder="Отправить сообщение ..."
+                      className="min-w-0 flex-1 bg-transparent py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={submit}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-black text-white transition hover:bg-neutral-800"
+                      aria-label="Отправить"
+                    >
+                      <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </motion.div>
       )}
     </AnimatePresence>

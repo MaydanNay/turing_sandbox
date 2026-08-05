@@ -1,4 +1,12 @@
-export type GamePhase = 'INIT' | 'PITCH' | 'CONFLICT' | 'VOTE' | 'RESOLVE';
+export type GamePhase =
+  | 'INIT'
+  | 'PITCH'
+  | 'RECESS'
+  | 'CONFLICT'
+  | 'REVISION'
+  | 'TURING'
+  | 'VOTE'
+  | 'RESOLVE';
 
 export type Gender = 'male' | 'female';
 

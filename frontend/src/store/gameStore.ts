@@ -5,6 +5,7 @@ import {
   CHARACTERS,
   rollSessionAges,
 } from '@/data/characters';
+import { MATCH_PHASE_ORDER, getPhaseMeta } from '@/data/gamePhaseConfig';
 import type {
   BackendRoomState,
   BackendWsMessage,
@@ -18,6 +19,8 @@ import type {
 import type { PlayerHandCard } from '@/types/card';
 import { revealTypeLabel, toRevealCardPayload } from '@/utils/cardArt';
 import { clampSuspicion } from '@/utils/seatPositions';
+import { useChatNotificationStore } from '@/store/chatNotificationStore';
+import { usePrivateChatStore } from '@/store/privateChatStore';
 
 interface GameStore {
   roomId: string | null;
@@ -32,6 +35,10 @@ interface GameStore {
   sessionAges: Record<string, number>;
   /** false — персонажи стоят на локации; true — сидят за столом */
   gatheredAtTable: boolean;
+  /** characterId игроков, отправленных в карцер (порядок изгнания) */
+  brigCharacterIds: string[];
+  /** voter player id → target characterId */
+  votes: Record<string, string>;
 
   setConnectionMeta: (roomId: string, clientId: string) => void;
   setConnected: (connected: boolean) => void;
@@ -51,6 +58,7 @@ interface GameStore {
   setTyping: (sender: string) => void;
   cycleMockPhase: () => void;
   gatherAtTable: () => void;
+  castVoteToBrig: (targetCharacterId: string) => void;
   reset: () => void;
 }
 
@@ -134,6 +142,8 @@ const initialState = {
   error: null as string | null,
   sessionAges: {} as Record<string, number>,
   gatheredAtTable: false,
+  brigCharacterIds: [] as string[],
+  votes: {} as Record<string, string>,
 };
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -146,6 +156,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setError: (error) => set({ error }),
 
   prepareLiveSession: (roomId, clientId) => {
+    usePrivateChatStore.getState().reset();
+    useChatNotificationStore.setState({ items: [] });
     set({
       roomId,
       clientId,
@@ -162,6 +174,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   loadMockScene: () => {
+    usePrivateChatStore.getState().reset();
+    useChatNotificationStore.setState({ items: [] });
     const sessionAges = rollSessionAges();
     const players = createMockPlayers(sessionAges);
     const self = players[0];
@@ -349,27 +363,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   cycleMockPhase: () => {
-    const order: GamePhase[] = ['INIT', 'PITCH', 'CONFLICT', 'VOTE', 'RESOLVE'];
     const current = get().gameState;
-    const next = order[(order.indexOf(current) + 1) % order.length] ?? 'INIT';
+    const index = MATCH_PHASE_ORDER.indexOf(current);
+    const next = MATCH_PHASE_ORDER[(index + 1) % MATCH_PHASE_ORDER.length] ?? 'INIT';
+    const meta = getPhaseMeta(next);
+
     set({
       gameState: next,
-      gatheredAtTable: next === 'INIT' ? false : true,
+      gatheredAtTable: meta.format !== 'lobby',
+      votes: {},
     });
     get().addChatMessage({
       sender: 'Система',
-      text: `>>> [MOCK] Переход в фазу ${next}`,
+      text: `>>> [MOCK] ${meta.title.toUpperCase()} — ${meta.subtitle}`,
       timestamp: new Date().toISOString(),
     });
   },
 
   gatherAtTable: () => {
     if (get().gatheredAtTable) return;
-    set({ gatheredAtTable: true });
+    const phase = get().gameState === 'INIT' ? 'PITCH' : get().gameState;
+    const meta = getPhaseMeta(phase);
+
+    set({ gatheredAtTable: true, gameState: phase });
     get().addChatMessage({
       sender: 'Система',
       text: 'Сбор за столом переговоров.',
       kind: 'system',
+      timestamp: new Date().toISOString(),
+    });
+    get().addChatMessage({
+      sender: 'Система',
+      text: `>>> ${meta.title.toUpperCase()} — ${meta.subtitle}`,
       timestamp: new Date().toISOString(),
     });
     get().recordCardReveal(
@@ -381,6 +406,42 @@ export const useGameStore = create<GameStore>((set, get) => ({
       },
       'Оказывается он хакер',
     );
+  },
+
+  castVoteToBrig: (targetCharacterId) => {
+    const { clientId, myProfile, players, votes, brigCharacterIds } = get();
+    const voterId = clientId ?? myProfile?.id;
+    if (!voterId) return;
+
+    const target = players.find((p) => p.characterId === targetCharacterId && p.is_alive);
+    if (!target) return;
+
+    if (myProfile?.characterId === targetCharacterId) return;
+
+    const nextVotes = { ...votes, [voterId]: targetCharacterId };
+    set({ votes: nextVotes });
+
+    if (brigCharacterIds.includes(targetCharacterId)) return;
+
+    set({
+      players: players.map((p) =>
+        p.characterId === targetCharacterId ? { ...p, is_alive: false } : p,
+      ),
+      brigCharacterIds: [...brigCharacterIds, targetCharacterId],
+    });
+
+    get().addChatMessage({
+      sender: 'Система',
+      text: `>>> ${target.name} отправлен в Карцер по результатам голосования.`,
+      kind: 'system',
+      timestamp: new Date().toISOString(),
+    });
+
+    get().addChatMessage({
+      sender: myProfile?.name ?? 'Вы',
+      text: `Голосую отправить ${target.name} в Карцер.`,
+      timestamp: new Date().toISOString(),
+    });
   },
 
   reset: () => set(initialState),

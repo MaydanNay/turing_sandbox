@@ -2,14 +2,11 @@ import { useCallback, useState } from 'react';
 
 import { GameScene } from '@/components/GameScene';
 import { LobbyScreen } from '@/components/LobbyScreen';
-import { mapFrontendPhase } from '@/config/env';
+import { playChatSendSoundEffect } from '@/hooks/useGeneralChatEffects';
 import { useWebSocket } from '@/providers/WebSocketProvider';
 import { useGameStore } from '@/store/gameStore';
-import type { GamePhase } from '@/types/game';
 
 type AppMode = 'lobby' | 'mock' | 'live';
-
-const PHASE_ORDER: GamePhase[] = ['INIT', 'PITCH', 'CONFLICT', 'VOTE', 'RESOLVE'];
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>('lobby');
@@ -30,9 +27,7 @@ export default function App() {
   const gatheredAtTable = useGameStore((s) => s.gatheredAtTable);
   const gatherAtTable = useGameStore((s) => s.gatherAtTable);
   const prepareLiveSession = useGameStore((s) => s.prepareLiveSession);
-  const cycleMockPhase = useGameStore((s) => s.cycleMockPhase);
   const addChatMessage = useGameStore((s) => s.addChatMessage);
-  const bumpSuspicion = useGameStore((s) => s.bumpSuspicion);
   const setTyping = useGameStore((s) => s.setTyping);
 
   const handleJoinMock = useCallback(() => {
@@ -60,50 +55,11 @@ export default function App() {
         setTyping(myProfile?.name ?? 'Вы');
         return;
       }
+      playChatSendSoundEffect();
       send({ action: 'chat', text });
     },
     [mode, send, addChatMessage, myProfile, setTyping],
   );
-
-  const handlePitch = useCallback(
-    (text: string) => {
-      if (mode === 'mock') {
-        addChatMessage({
-          sender: myProfile?.name ?? 'Вы',
-          text: `[PITCH] ${text}`,
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      send({ action: 'pitch', text });
-    },
-    [mode, send, addChatMessage, myProfile],
-  );
-
-  const handleVote = useCallback(
-    (targetId: string) => {
-      if (mode === 'mock') {
-        bumpSuspicion(targetId, 25);
-        addChatMessage({
-          sender: myProfile?.name ?? 'Вы',
-          text: `Голосую за изгнание: ${players.find((p) => p.id === targetId)?.name ?? targetId}`,
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-      send({ action: 'vote', text: targetId, payload: { target: targetId } });
-      bumpSuspicion(targetId, 15);
-    },
-    [mode, send, bumpSuspicion, addChatMessage, myProfile, players],
-  );
-
-  const handleAdvancePhase = useCallback(() => {
-    const idx = PHASE_ORDER.indexOf(gameState);
-    const next = PHASE_ORDER[idx + 1] ?? PHASE_ORDER[0];
-    if (next) {
-      send({ action: 'phase', text: mapFrontendPhase(next) });
-    }
-  }, [gameState, send]);
 
   if (mode === 'lobby') {
     return (
@@ -131,10 +87,6 @@ export default function App() {
       selectedPlayerId={selectedPlayerId}
       onSelectPlayer={setSelectedPlayerId}
       onSendChat={handleSendChat}
-      onPitch={handlePitch}
-      onVote={handleVote}
-      onAdvancePhase={mode === 'live' ? handleAdvancePhase : undefined}
-      onMockPhase={mode === 'mock' ? cycleMockPhase : undefined}
     />
   );
 }

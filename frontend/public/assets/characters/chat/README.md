@@ -13,9 +13,9 @@ chester_chat.png
 roxy_chat.png
 ```
 
-Сейчас загружены: **cole**, **martha**, **chester**, **roxy**.
+Сейчас загружены все 8 персонажей: **vance**, **cole**, **martha**, **penny**, **gwen**, **logan**, **chester**, **roxy**.
 
-Остальные персонажи пока используют chibi-спрайт, затем `chibi/default.png`.
+Остальные id пока используют chibi-спрайт, затем `chibi/default.png`.
 
 ## Рекомендации
 

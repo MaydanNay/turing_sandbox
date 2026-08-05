@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 
+import { playCardHoverSoundEffect, playUiSound } from '@/audio/uiSounds';
 import type { PlayerHandCard } from '@/types/card';
 
 import { CardFlipBody } from './CardFaces';
@@ -37,10 +38,12 @@ export function PlayerCard({
   const handleClick = () => {
     if (disabled) return;
     if (canReveal) {
+      playUiSound('cardReveal');
       onReveal?.(card.id);
       return;
     }
     if (!revealMode) {
+      playUiSound('card');
       onSelect(card.id);
     }
   };
@@ -72,7 +75,12 @@ export function PlayerCard({
             handleClick();
           }
         }}
-        onHoverStart={() => interactive && onHoverStart()}
+        onHoverStart={() => {
+          if (interactive) {
+            playCardHoverSoundEffect();
+            onHoverStart();
+          }
+        }}
         onHoverEnd={onHoverEnd}
         aria-label={canReveal ? `Раскрыть: ${card.title}` : card.title}
         aria-disabled={!interactive}

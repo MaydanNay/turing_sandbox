@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'framer-motion';
-
+import { playUiSound } from '@/audio/uiSounds';
 import { EmptySeatSprite, SeatSprite } from '@/components/SeatSprite';
 import { StandingCharacterSprite } from '@/components/StandingCharacterSprite';
 import { ASSETS } from '@/config/assets';
@@ -25,6 +25,8 @@ interface RoundTableProps {
   selectedPlayerId?: string | null;
   onSelectPlayer?: (id: string) => void;
   onOpenPrivateChat?: (id: string) => void;
+  /** За столом: клик по месту открывает кулуары (только RECESS) */
+  privateChatAtSeats?: boolean;
 }
 
 export function RoundTable({
@@ -35,6 +37,7 @@ export function RoundTable({
   selectedPlayerId,
   onSelectPlayer,
   onOpenPrivateChat,
+  privateChatAtSeats = false,
 }: RoundTableProps) {
   const playerBySeat = playersBySeat(players);
   const { table } = SCENE_LAYOUT;
@@ -58,6 +61,16 @@ export function RoundTable({
     z: number,
   ) => {
     if (showSeated && player && !PREVIEW_EMPTY_SEATS) {
+      if (!player.is_alive) {
+        return (
+          <EmptySeatSprite
+            key={`empty-${seatNumber}`}
+            seatNumber={seatNumber}
+            layout={layout}
+            zIndex={z}
+          />
+        );
+      }
       return (
         <SeatSprite
           key={`seated-${player.id}`}
@@ -67,7 +80,9 @@ export function RoundTable({
           zIndex={z}
           isSelf={player.id === selfId}
           selected={selectedPlayerId === player.id}
-          onSelect={onOpenPrivateChat ?? onSelectPlayer}
+          onSelect={
+            privateChatAtSeats ? onOpenPrivateChat : onSelectPlayer
+          }
         />
       );
     }
@@ -102,7 +117,10 @@ export function RoundTable({
         <button
           type="button"
           className="pointer-events-auto absolute inset-0 cursor-pointer bg-transparent focus:outline-none"
-          onClick={onGatherAtTable}
+          onClick={() => {
+            playUiSound('table');
+            onGatherAtTable();
+          }}
           aria-label="Собраться за столом"
         />
       )}
@@ -110,7 +128,7 @@ export function RoundTable({
   );
 
   return (
-    <div className="absolute inset-0 overflow-hidden">
+    <div className="absolute inset-0 overflow-visible">
       <img
         src={ASSETS.locations.outpost}
         alt=""

@@ -29,7 +29,10 @@ export function buildApiUrl(path: string): string {
 const BACKEND_PHASE_MAP: Record<string, GamePhase> = {
   Init: 'INIT',
   Pitch: 'PITCH',
+  Recess: 'RECESS',
   Conflict: 'CONFLICT',
+  Revision: 'REVISION',
+  Turing: 'TURING',
   Vote: 'VOTE',
   Finished: 'RESOLVE',
 };
@@ -42,7 +45,10 @@ export function mapFrontendPhase(phase: GamePhase): string {
   const reverse: Record<GamePhase, string> = {
     INIT: 'Init',
     PITCH: 'Pitch',
+    RECESS: 'Recess',
     CONFLICT: 'Conflict',
+    REVISION: 'Revision',
+    TURING: 'Turing',
     VOTE: 'Vote',
     RESOLVE: 'Finished',
   };
