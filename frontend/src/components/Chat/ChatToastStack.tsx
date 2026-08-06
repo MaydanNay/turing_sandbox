@@ -6,9 +6,13 @@ import { useChatNotificationStore } from '@/store/chatNotificationStore';
 
 interface ChatToastStackProps {
   onOpenPrivateChat?: (playerId: string) => void;
+  onOpenGeneralChat?: () => void;
 }
 
-function ChatToastContent({ onOpenPrivateChat }: ChatToastStackProps) {
+function ChatToastContent({
+  onOpenPrivateChat,
+  onOpenGeneralChat,
+}: ChatToastStackProps) {
   const items = useChatNotificationStore((s) => s.items);
   const dismiss = useChatNotificationStore((s) => s.dismiss);
 
@@ -27,6 +31,8 @@ function ChatToastContent({ onOpenPrivateChat }: ChatToastStackProps) {
             onClick={() => {
               if (item.kind === 'private' && item.playerId) {
                 onOpenPrivateChat?.(item.playerId);
+              } else if (item.kind === 'general') {
+                onOpenGeneralChat?.();
               }
               dismiss(item.id);
             }}

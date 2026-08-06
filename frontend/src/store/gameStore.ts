@@ -1,12 +1,16 @@
 import { create } from 'zustand';
 
 import { mapBackendPhase } from '@/config/env';
+import { mapBackendHandCard } from '@/data/cardDecks';
 import {
   CHARACTERS,
+  getCharacterById,
   rollSessionAges,
 } from '@/data/characters';
-import { MATCH_PHASE_ORDER, getPhaseMeta } from '@/data/gamePhaseConfig';
+import { getPhaseMeta } from '@/data/gamePhaseConfig';
+import { evaluateMeetingCallGate } from '@/data/meetingCallLimits';
 import type {
+  BackendHandCard,
   BackendHistoryEvent,
   BackendRoomState,
   BackendWsMessage,
@@ -20,10 +24,15 @@ import type {
 import type { PlayerHandCard } from '@/types/card';
 import { revealTypeLabel, toRevealCardPayload } from '@/utils/cardArt';
 import { clampSuspicion } from '@/utils/seatPositions';
+import { standUpSpawnForSeat } from '@/utils/outpostCollision';
 import { useChatNotificationStore } from '@/store/chatNotificationStore';
+import { useOutpostMovementStore } from '@/store/outpostMovementStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import type { UiSnapshot } from '@/store/sessionPersistence';
 import { loadUiSnapshot } from '@/store/sessionPersistence';
+
+/** Stable empty hand — never allocate `[]` inside zustand selectors */
+export const EMPTY_CARDS: PlayerHandCard[] = [];
 
 interface GameStore {
   roomId: string | null;
@@ -36,8 +45,18 @@ interface GameStore {
   typing: TypingIndicator[];
   error: string | null;
   sessionAges: Record<string, number>;
-  /** false — персонажи стоят на локации; true — сидят за столом */
+  /** Own 6-card hand (incl. secret_mission) */
+  myHand: PlayerHandCard[];
+  /** Public revealed cards by characterId / clientId (never secret_mission) */
+  revealedByPlayer: Record<string, PlayerHandCard[]>;
+  /** false — персонажи стоят на локации; true — общий сбор за столом */
   gatheredAtTable: boolean;
+  /** Кто сидит лично (вне общего сбора) */
+  seatedPlayerIds: string[];
+  /** Сколько раз игрок уже созвал общий сбор в этой сессии */
+  meetingCallsUsed: number;
+  /** Timestamp последнего созыва (ms) */
+  lastMeetingCallAt: number | null;
   /** characterId игроков, отправленных в карцер (порядок изгнания) */
   brigCharacterIds: string[];
   /** voter player id → target characterId */
@@ -46,11 +65,13 @@ interface GameStore {
   setConnectionMeta: (roomId: string, clientId: string) => void;
   setConnected: (connected: boolean) => void;
   setError: (error: string | null) => void;
-  loadMockScene: () => void;
   prepareLiveSession: (roomId: string, clientId: string) => void;
   handleBackendMessage: (msg: BackendWsMessage) => void;
   handleClientMessage: (msg: WsClientMessage) => void;
   applyRoomState: (state: BackendRoomState, selfId?: string) => void;
+  setMyHand: (cards: PlayerHandCard[]) => void;
+  revealMyCard: (cardId: string) => PlayerHandCard | null;
+  getRevealedCardsFor: (characterOrClientId: string) => PlayerHandCard[];
   addChatMessage: (msg: Omit<ChatMessage, 'id'>) => void;
   recordCardReveal: (
     playerName: string,
@@ -59,12 +80,15 @@ interface GameStore {
   ) => void;
   bumpSuspicion: (targetId: string, amount?: number) => void;
   setTyping: (sender: string) => void;
-  cycleMockPhase: () => void;
+  sitSelf: (playerId: string) => void;
+  standSelf: (playerId: string) => void;
+  /** Returns false if cooldown / max calls block the meeting. */
+  tryCallMeeting: () => boolean;
   gatherAtTable: () => void;
+  leaveTable: () => void;
   castVoteToBrig: (targetCharacterId: string) => void;
   applyHistoryEvents: (events: BackendHistoryEvent[]) => void;
-  applyUiSnapshot: (snapshot: UiSnapshot) => void;
-  restoreMockSnapshot: (snapshot: UiSnapshot) => void;
+  applyUiSnapshot: (snapshot: UiSnapshot, opts?: { restoreGathered?: boolean }) => void;
   reset: () => void;
 }
 
@@ -90,15 +114,11 @@ function buildPlayerFromCharacter(
   };
 }
 
-function createMockPlayers(sessionAges: Record<string, number>): Player[] {
-  return CHARACTERS.map((c) =>
-    buildPlayerFromCharacter(c, sessionAges[c.id] ?? c.ageMin, {
-      is_ai: c.seat >= 6,
-    }),
-  );
-}
-
-function playerToMyProfile(player: Player): MyProfile {
+function playerToMyProfile(
+  player: Player,
+  hand?: PlayerHandCard[] | null,
+): MyProfile {
+  const invCard = hand?.find((c) => c.type === 'inventory');
   return {
     id: player.id,
     characterId: player.characterId,
@@ -106,34 +126,55 @@ function playerToMyProfile(player: Player): MyProfile {
     role: player.role,
     gender: player.gender,
     age: player.age,
-    inventory: player.id === 'vance' ? ['Ключ-карта', 'Рация', 'Досье'] : [],
+    inventory: invCard ? [invCard.title] : [],
   };
 }
 
-/** Тот же порядок мест, что и в mock: игрок #0 → Vance, #1 → Cole, … */
+function mapHandCards(raw: BackendHandCard[] | undefined): PlayerHandCard[] {
+  if (!raw?.length) return [];
+  return raw.map((c) => mapBackendHandCard(c as unknown as Record<string, unknown>));
+}
+
+function mergeRevealed(
+  prev: Record<string, PlayerHandCard[]>,
+  key: string | null | undefined,
+  card: PlayerHandCard,
+): Record<string, PlayerHandCard[]> {
+  if (!key || card.type === 'secret_mission' || card.type === 'character') {
+    return prev;
+  }
+  const existing = prev[key] ?? [];
+  if (existing.some((c) => c.id === card.id)) return prev;
+  return { ...prev, [key]: [...existing, { ...card, isRevealed: true }] };
+}
+
+/** Map Redis seats → frontend players using shuffled character_id (seat art stays per character). */
 function backendPlayersToFrontend(
   playersRecord: BackendRoomState['players'],
   sessionAges: Record<string, number>,
 ): Player[] {
-  return Object.entries(playersRecord)
-    .slice(0, CHARACTERS.length)
-    .map(([id, info], index) => {
-      const character = CHARACTERS[index];
-      if (!character) {
-        throw new Error(`Missing character definition for seat index ${index}`);
-      }
-      return buildPlayerFromCharacter(
-        character,
-        sessionAges[character.id] ?? character.ageMin,
-        {
-          id,
-          role: info.role ?? character.role,
-          stats: info.role ? { Профессия: info.role } : { Роль: character.role },
-          is_ai: info.is_ai,
-          connected: info.connected,
-        },
-      );
-    });
+  const entries = Object.entries(playersRecord);
+  return entries.map(([id, info], index) => {
+    const fromServer = info.character_id
+      ? getCharacterById(info.character_id)
+      : undefined;
+    // Legacy rooms without character_id: keep old seat-index mapping
+    const character = fromServer ?? CHARACTERS[index % CHARACTERS.length];
+    if (!character) {
+      throw new Error(`Missing character definition for player ${id}`);
+    }
+    return buildPlayerFromCharacter(
+      character,
+      sessionAges[character.id] ?? character.ageMin,
+      {
+        id,
+        role: info.role ?? character.role,
+        stats: info.role ? { Профессия: info.role } : { Роль: character.role },
+        is_ai: info.is_ai,
+        connected: info.connected,
+      },
+    );
+  });
 }
 
 const initialState = {
@@ -147,7 +188,12 @@ const initialState = {
   typing: [] as TypingIndicator[],
   error: null as string | null,
   sessionAges: {} as Record<string, number>,
+  myHand: [] as PlayerHandCard[],
+  revealedByPlayer: {} as Record<string, PlayerHandCard[]>,
   gatheredAtTable: false,
+  seatedPlayerIds: [] as string[],
+  meetingCallsUsed: 0,
+  lastMeetingCallAt: null as number | null,
   brigCharacterIds: [] as string[],
   votes: {} as Record<string, string>,
 };
@@ -176,51 +222,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       myProfile: null,
       error: null,
       sessionAges: rollSessionAges(),
+      myHand: [],
+      revealedByPlayer: {},
       gatheredAtTable: false,
+      seatedPlayerIds: [],
+      meetingCallsUsed: 0,
+      lastMeetingCallAt: null,
       brigCharacterIds: [],
       votes: {},
-    });
-  },
-
-  loadMockScene: () => {
-    usePrivateChatStore.getState().reset();
-    usePrivateChatStore.getState().setLiveMode(false);
-    useChatNotificationStore.setState({ items: [] });
-    const sessionAges = rollSessionAges();
-    const players = createMockPlayers(sessionAges);
-    const self = players[0];
-    set({
-      roomId: 'mock-room',
-      clientId: self?.id ?? 'vance',
-      connected: false,
-      gameState: 'INIT',
-      sessionAges,
-      players,
-      myProfile: self ? playerToMyProfile(self) : null,
-      chat: [
-        {
-          id: 'c1',
-          sender: 'Logan',
-          text: 'Я врач. Без меня вы не переживёте зиму в бункере.',
-          timestamp: new Date(Date.now() - 120_000).toISOString(),
-          is_ai: true,
-        },
-        {
-          id: 'c2',
-          sender: 'Penny',
-          text: 'Генератор держится на честном слове. Мне нужен доступ к реактору.',
-          timestamp: new Date(Date.now() - 60_000).toISOString(),
-        },
-        {
-          id: 'c3',
-          sender: 'Система',
-          text: '>>> ФАЗА: INIT — сбор у аванпоста.',
-          timestamp: new Date().toISOString(),
-        },
-      ],
-      typing: [],
-      error: null,
-      gatheredAtTable: false,
     });
   },
 
@@ -230,15 +239,52 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const players = backendPlayersToFrontend(state.players, sessionAges);
     const gameState = mapBackendPhase(state.phase);
     const self = selfId ? players.find((p) => p.id === selfId) : undefined;
+    const hand = get().myHand;
+    // Sit/stand is local UX — never auto-gather just because the match left INIT.
+    // Continue/reconnect restores via applyUiSnapshot({ restoreGathered: true }).
+    const gatheredAtTable =
+      gameState === 'INIT' ? false : get().gatheredAtTable;
 
     set({
       roomId: state.room_id,
       gameState,
       sessionAges,
       players,
-      gatheredAtTable: gameState !== 'INIT',
-      myProfile: self ? playerToMyProfile(self) : get().myProfile,
+      gatheredAtTable,
+      myProfile: self ? playerToMyProfile(self, hand) : get().myProfile,
     });
+  },
+
+  setMyHand: (cards) => {
+    const self = get().players.find((p) => p.id === get().clientId);
+    set({
+      myHand: cards,
+      myProfile: self
+        ? playerToMyProfile(self, cards)
+        : get().myProfile
+          ? { ...get().myProfile!, inventory: cards.find((c) => c.type === 'inventory') ? [cards.find((c) => c.type === 'inventory')!.title] : get().myProfile!.inventory }
+          : null,
+    });
+  },
+
+  revealMyCard: (cardId) => {
+    const hand = get().myHand;
+    const card = hand.find((c) => c.id === cardId);
+    if (!card || card.isRevealed) return null;
+    const revealed = { ...card, isRevealed: true };
+    const myHand = hand.map((c) => (c.id === cardId ? revealed : c));
+    const myProfile = get().myProfile;
+    let revealedByPlayer = get().revealedByPlayer;
+    if (myProfile && revealed.type !== 'secret_mission' && revealed.type !== 'character') {
+      revealedByPlayer = mergeRevealed(revealedByPlayer, myProfile.characterId, revealed);
+      revealedByPlayer = mergeRevealed(revealedByPlayer, myProfile.id, revealed);
+    }
+    set({ myHand, revealedByPlayer });
+    return revealed;
+  },
+
+  getRevealedCardsFor: (characterOrClientId) => {
+    return get().revealedByPlayer[characterOrClientId] ?? EMPTY_CARDS;
   },
 
   handleBackendMessage: (msg) => {
@@ -249,14 +295,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
         get().applyRoomState(msg.state, msg.client_id);
         {
           const snap = loadUiSnapshot(msg.room_id);
-          if (snap) get().applyUiSnapshot(snap);
+          // Restore brig/votes only — never re-seat from a stale snapshot
+          if (snap) get().applyUiSnapshot(snap, { restoreGathered: false });
         }
         break;
       case 'history':
         get().applyHistoryEvents(msg.events ?? []);
         {
           const snap = loadUiSnapshot(msg.room_id);
-          if (snap) get().applyUiSnapshot(snap);
+          if (snap) get().applyUiSnapshot(snap, { restoreGathered: false });
         }
         break;
       case 'phase_changed':
@@ -326,6 +373,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
       case 'private_chat_sync':
         usePrivateChatStore.getState().applyServerSync(msg.threads ?? {});
         break;
+      case 'hand':
+        get().setMyHand(mapHandCards(msg.cards));
+        break;
+      case 'revealed_cards_sync': {
+        const next: Record<string, PlayerHandCard[]> = {};
+        for (const [key, cards] of Object.entries(msg.by_player ?? {})) {
+          next[key] = mapHandCards(cards).filter(
+            (c) => c.type !== 'secret_mission' && c.type !== 'character',
+          );
+        }
+        set({ revealedByPlayer: next });
+        break;
+      }
+      case 'card_revealed': {
+        const card = mapBackendHandCard(msg.card as unknown as Record<string, unknown>);
+        let revealedByPlayer = get().revealedByPlayer;
+        revealedByPlayer = mergeRevealed(revealedByPlayer, msg.character_id, card);
+        revealedByPlayer = mergeRevealed(revealedByPlayer, msg.client_id, card);
+        set({ revealedByPlayer });
+        const players = get().players;
+        const myProfile = get().myProfile;
+        const player =
+          players.find((p) => p.id === msg.client_id) ??
+          players.find((p) => p.characterId === msg.character_id);
+        const name =
+          player?.name ??
+          (myProfile?.id === msg.client_id ? myProfile.name : msg.client_id);
+        if (msg.client_id !== clientId) {
+          get().recordCardReveal(name, card);
+        }
+        break;
+      }
       default: {
         const _exhaustive: never = msg;
         void _exhaustive;
@@ -406,22 +485,58 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }, 3100);
   },
 
-  cycleMockPhase: () => {
-    const current = get().gameState;
-    const index = MATCH_PHASE_ORDER.indexOf(current);
-    const next = MATCH_PHASE_ORDER[(index + 1) % MATCH_PHASE_ORDER.length] ?? 'INIT';
-    const meta = getPhaseMeta(next);
+  sitSelf: (playerId) => {
+    if (get().gatheredAtTable) return;
+    const seated = get().seatedPlayerIds;
+    if (seated.includes(playerId)) return;
+    const move = useOutpostMovementStore.getState();
+    const { [playerId]: _drop, ...restAnim } = move.moveAnim;
+    useOutpostMovementStore.setState({
+      remainingPath: { ...move.remainingPath, [playerId]: [] },
+      inMotion: { ...move.inMotion, [playerId]: false },
+      moveAnim: restAnim,
+      pendingSitPlayerId:
+        move.pendingSitPlayerId === playerId ? null : move.pendingSitPlayerId,
+    });
+    set({ seatedPlayerIds: [...seated, playerId] });
+  },
 
+  standSelf: (playerId) => {
+    if (get().gatheredAtTable) return;
+    if (!get().seatedPlayerIds.includes(playerId)) return;
+    const player = get().players.find((p) => p.id === playerId);
     set({
-      gameState: next,
-      gatheredAtTable: meta.format !== 'lobby',
-      votes: {},
+      seatedPlayerIds: get().seatedPlayerIds.filter((id) => id !== playerId),
     });
-    get().addChatMessage({
-      sender: 'Система',
-      text: `>>> [MOCK] ${meta.title.toUpperCase()} — ${meta.subtitle}`,
-      timestamp: new Date().toISOString(),
+    if (player) {
+      const spawn = standUpSpawnForSeat(player.tablePosition + 1);
+      const move = useOutpostMovementStore.getState();
+      const scale = move.positions[playerId]?.scale ?? 0.9;
+      const { [playerId]: _drop, ...restAnim } = move.moveAnim;
+      useOutpostMovementStore.setState({
+        positions: {
+          ...move.positions,
+          [playerId]: { x: spawn.x, y: spawn.y, scale },
+        },
+        remainingPath: { ...move.remainingPath, [playerId]: [] },
+        inMotion: { ...move.inMotion, [playerId]: false },
+        moveAnim: restAnim,
+      });
+    }
+  },
+
+  tryCallMeeting: () => {
+    if (get().gatheredAtTable) return false;
+    const gate = evaluateMeetingCallGate(
+      get().meetingCallsUsed,
+      get().lastMeetingCallAt,
+    );
+    if (!gate.ok) return false;
+    set({
+      meetingCallsUsed: get().meetingCallsUsed + 1,
+      lastMeetingCallAt: Date.now(),
     });
+    return true;
   },
 
   gatherAtTable: () => {
@@ -429,7 +544,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const phase = get().gameState === 'INIT' ? 'PITCH' : get().gameState;
     const meta = getPhaseMeta(phase);
 
-    set({ gatheredAtTable: true, gameState: phase });
+    useOutpostMovementStore.getState().reset();
+
+    set({ gatheredAtTable: true, seatedPlayerIds: [], gameState: phase });
     get().addChatMessage({
       sender: 'Система',
       text: 'Сбор за столом переговоров.',
@@ -450,6 +567,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       },
       'Оказывается он хакер',
     );
+  },
+
+  leaveTable: () => {
+    if (!get().gatheredAtTable) return;
+    usePrivateChatStore.getState().setActivePartner(null);
+    set({ gatheredAtTable: false, seatedPlayerIds: [] });
+    get().addChatMessage({
+      sender: 'Система',
+      text: 'Вы встали из-за стола.',
+      kind: 'system',
+      timestamp: new Date().toISOString(),
+    });
   },
 
   castVoteToBrig: (targetCharacterId) => {
@@ -548,9 +677,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ chat: lines });
   },
 
-  applyUiSnapshot: (snapshot) => {
+  applyUiSnapshot: (snapshot, opts) => {
+    const restoreGathered = opts?.restoreGathered !== false;
     set({
-      gatheredAtTable: snapshot.gatheredAtTable,
+      ...(restoreGathered ? { gatheredAtTable: snapshot.gatheredAtTable } : {}),
+      seatedPlayerIds: snapshot.seatedPlayerIds ?? [],
+      meetingCallsUsed: snapshot.meetingCallsUsed ?? 0,
+      lastMeetingCallAt: snapshot.lastMeetingCallAt ?? null,
       brigCharacterIds: snapshot.brigCharacterIds ?? [],
       votes: snapshot.votes ?? {},
       sessionAges:
@@ -558,39 +691,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
           ? snapshot.sessionAges
           : get().sessionAges,
     });
-    // Live private chat authority is Redis/WS sync — do not hydrate from snapshot.
-    if (snapshot.mode === 'mock') {
-      usePrivateChatStore.getState().hydrate({
-        threads: snapshot.privateThreads ?? {},
-        unread: snapshot.privateUnread ?? {},
-        seededPartners: snapshot.privateSeeded ?? {},
-      });
+    if (snapshot.outpostPositions && Object.keys(snapshot.outpostPositions).length > 0) {
+      useOutpostMovementStore.getState().hydratePositions(snapshot.outpostPositions);
+    } else if (!get().gatheredAtTable) {
+      useOutpostMovementStore.getState().sanitizeAllPositions();
     }
-  },
-
-  restoreMockSnapshot: (snapshot) => {
-    useChatNotificationStore.setState({ items: [] });
-    usePrivateChatStore.getState().setLiveMode(false);
-    set({
-      roomId: snapshot.roomId,
-      clientId: snapshot.clientId,
-      connected: false,
-      gameState: snapshot.gameState,
-      players: snapshot.players,
-      chat: snapshot.chat,
-      myProfile: snapshot.myProfile,
-      typing: [],
-      error: null,
-      sessionAges: snapshot.sessionAges,
-      gatheredAtTable: snapshot.gatheredAtTable,
-      brigCharacterIds: snapshot.brigCharacterIds ?? [],
-      votes: snapshot.votes ?? {},
-    });
-    usePrivateChatStore.getState().hydrate({
-      threads: snapshot.privateThreads ?? {},
-      unread: snapshot.privateUnread ?? {},
-      seededPartners: snapshot.privateSeeded ?? {},
-    });
+    // Hands + private chat: Redis/WS is authority — never hydrate from localStorage.
   },
 
   reset: () => set(initialState),

@@ -1,0 +1,68 @@
+export interface WalkPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Walkable floor polygons in full-scene % coords (yellow).
+ * Edit via ?walkEdit=1 → Copy JSON → paste here.
+ */
+export const OUTPOST_WALK_POLYGONS: WalkPoint[][] = [
+  [
+    { x: 68, y: 37.9 },
+    { x: 92.9, y: 56.6 },
+    { x: 91, y: 60.3 },
+    { x: 89.3, y: 76 },
+    { x: 90.4, y: 87.6 },
+    { x: 84, y: 97.2 },
+    { x: 73.1, y: 102.2 },
+    { x: 22.8, y: 105.6 },
+    { x: 7.7, y: 88.1 },
+    { x: 0, y: 51.2 },
+    { x: 8.9, y: 44.7 },
+    { x: 18.8, y: 52.2 },
+    { x: 35, y: 40.4 },
+    { x: 36.9, y: 37.7 },
+    { x: 35.5, y: 34 },
+    { x: 39.8, y: 29.9 },
+    { x: 41.9, y: 29.2 },
+    { x: 48.9, y: 29.2 },
+    { x: 54, y: 31.3 },
+    { x: 64, y: 41.2 },
+  ],
+];
+
+/**
+ * Blocked / no-walk polygons (red holes), e.g. table silhouette.
+ * Point is walkable only if inside a walk poly AND outside all block polys.
+ */
+export const OUTPOST_BLOCK_POLYGONS: WalkPoint[][] = [
+  [
+    { x: 42.2, y: 48.5 },
+    { x: 38.4, y: 50.4 },
+    { x: 35.6, y: 53.8 },
+    { x: 34, y: 56.7 },
+    { x: 33.6, y: 60.4 },
+    { x: 34.6, y: 64.6 },
+    { x: 37.4, y: 73.8 },
+    { x: 40.8, y: 77.2 },
+    { x: 46.3, y: 79.7 },
+    { x: 50.2, y: 83.3 },
+    { x: 52.5, y: 83 },
+    { x: 56.7, y: 79 },
+    { x: 60.2, y: 77.2 },
+    { x: 62.2, y: 75 },
+    { x: 65.3, y: 72.4 },
+    { x: 66.3, y: 67.6 },
+    { x: 66.6, y: 62.6 },
+    { x: 66.9, y: 59.9 },
+    { x: 66.7, y: 57.5 },
+    { x: 65.5, y: 54.1 },
+    { x: 63.5, y: 51.8 },
+    { x: 60.8, y: 49.7 },
+    { x: 57, y: 48 },
+    { x: 53.1, y: 47 },
+    { x: 48.9, y: 46.9 },
+    { x: 45.4, y: 47.3 },
+  ],
+];

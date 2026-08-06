@@ -30,15 +30,16 @@ export const PREVIEW_OUTPOST_STANDING = false;
 export const OUTPOST_BASE_WIDTH = 9;
 
 export const OUTPOST_LAYOUT = {
+  /** Spawn / stand points in full-scene % — must stay outside table+chairs. */
   spots: [
-    { x: 12, y: 40, scale: 0.95 },  // 01 vance
-    { x: 40, y: 23, scale: 0.92 },  // 02 cole
-    { x: 70, y: 38, scale: 0.9 },   // 03 martha
-    { x: 67, y: 52, scale: 0.88 },  // 04 penny
-    { x: 60, y: 68, scale: 0.93 },  // 05 gwen
-    { x: 78, y: 62, scale: 0.9 },   // 06 logan
-    { x: 18, y: 56, scale: 0.85 },  // 07 chester
-    { x: 38, y: 65, scale: 0.88 },  // 08 roxy
+    { x: 10, y: 34, scale: 0.95 },  // 01 vance — left consoles
+    { x: 28, y: 18, scale: 0.92 },  // 02 cole — top
+    { x: 72, y: 20, scale: 0.9 },   // 03 martha — top-right
+    { x: 88, y: 42, scale: 0.88 },  // 04 penny — right
+    { x: 86, y: 68, scale: 0.93 },  // 05 gwen — bottom-right
+    { x: 58, y: 78, scale: 0.9 },   // 06 logan — bottom
+    { x: 12, y: 62, scale: 0.85 },  // 07 chester — bottom-left
+    { x: 22, y: 78, scale: 0.88 },  // 08 roxy — bottom-left floor
   ] satisfies SeatLayout[],
 } as const;
 
@@ -46,6 +47,23 @@ export function getOutpostSpot(seatNumber: number): SeatLayout {
   const index = seatNumber - 1;
   return OUTPOST_LAYOUT.spots[index] ?? OUTPOST_LAYOUT.spots[0] ?? { x: 50, y: 50, scale: 0.9 };
 }
+
+/** Convert seat coords (% inside SCENE_GROUP) to full-scene % for standing walk. */
+export function seatLayoutToScenePos(seat: SeatLayout): { x: number; y: number } {
+  const w = SCENE_GROUP.widthPercent;
+  return {
+    x: SCENE_GROUP.x + (seat.x / 100 - 0.5) * w,
+    y: SCENE_GROUP.y + (seat.y / 100 - 0.5) * w,
+  };
+}
+
+/** Soft wander box for AI / clicks (% of scene). Keep ≥ walkable polygon bbox. */
+export const OUTPOST_WANDER_BOUNDS = {
+  minX: 0,
+  maxX: 95,
+  minY: 22,
+  maxY: 108,
+} as const;
 
 /** 8 стульев у стола — правь здесь */
 const SEATS = [

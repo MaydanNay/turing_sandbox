@@ -22,6 +22,7 @@ interface UseGeneralChatEffectsOptions {
   myProfile?: MyProfile | null;
   gatheredAtTable: boolean;
   gameState: GamePhase;
+  generalChatOpen?: boolean;
 }
 
 /** Звуки и toast при новых сообщениях общего чата. */
@@ -30,6 +31,7 @@ export function useGeneralChatEffects({
   myProfile,
   gatheredAtTable,
   gameState,
+  generalChatOpen = true,
 }: UseGeneralChatEffectsOptions): void {
   const initialized = useRef(false);
   const prevLength = useRef(0);
@@ -50,7 +52,8 @@ export function useGeneralChatEffects({
     const newMessages = chat.slice(prevLength.current);
     prevLength.current = chat.length;
 
-    const generalChatVisible = gatheredAtTable && gameState !== 'RECESS';
+    const generalChatVisible =
+      gatheredAtTable && gameState !== 'RECESS' && generalChatOpen;
 
     for (const msg of newMessages) {
       if (!isPlayerMessage(msg)) continue;
@@ -72,7 +75,14 @@ export function useGeneralChatEffects({
         });
       }
     }
-  }, [chat, gameState, gatheredAtTable, myProfile, pushNotification]);
+  }, [
+    chat,
+    gameState,
+    gatheredAtTable,
+    generalChatOpen,
+    myProfile,
+    pushNotification,
+  ]);
 }
 
 /** Звук отправки для live-режима (сообщение уходит до echo с сервера). */

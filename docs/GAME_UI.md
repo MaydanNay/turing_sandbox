@@ -19,7 +19,7 @@
 
 ```mermaid
 flowchart TD
-  Lobby[Лобби] -->|New Game / Live Session| Scene[GameScene]
+  Lobby[Лобби] -->|New Game → Live| Scene[GameScene]
   Scene --> Standing[Аванпост · стоя]
   Standing -->|клик по персонажу| Menu[Меню действий]
   Menu -->|Пообщаться| Private[Кулуары · приватный чат]
@@ -34,7 +34,7 @@ flowchart TD
 
 | Режим | Как попасть | Что на экране |
 |-------|-------------|----------------|
-| Лобби | Старт приложения | Фон меню, «New Game» / «Live Session» |
+| Лобби | Старт приложения | Фон меню, **New Game** (live API), Continue, History |
 | Аванпост (стоя) | После старта матча, пока не сели | Фон локации, чиби-спрайты, пустые стулья, стол, веер карт снизу |
 | Кулуары | Меню персонажа → «Пообщаться» (стоя всегда; за столом — только RECESS) | Портрет слева, высокий чат справа, вкладки раскрытых карт, «Закрыть чат» |
 | За столом | Клик по столу | Персонажи сидят, HUD-чат (если не RECESS), карцер справа сверху |
@@ -66,7 +66,7 @@ flowchart TD
 
 - Full-bleed `menu.png`
 - Слева внизу: *The Outpost* / **Turing Station**
-- Справа: пункты **New Game** (mock) и **Live Session** (HTTP + WS)
+- Справа: **New Game** → `createSession` + WebSocket (единственный игровой путь).
 - Клавиатура: ↑↓ / Enter
 
 ---
@@ -95,7 +95,8 @@ flowchart TD
 **Клик по столу** → `gatherAtTable`: персонажи садятся, появляется HUD, рука снизу скрывается.
 
 8 канонических персонажей: `frontend/src/data/characters.ts`  
-(ids: `vance`, `cole`, `martha`, `penny`, `gwen`, `logan`, `chester`, `roxy`).
+(ids: `vance`, `cole`, `martha`, `penny`, `gwen`, `logan`, `chester`, `roxy`).  
+В **Live** при `assign_roles` сервер **shuffle**'ит `character_id` и профессию на места комнаты (один раз за матч). Визуальный seat остаётся за персонажем (Cole всегда на месте Cole).
 
 ---
 
@@ -155,7 +156,7 @@ flowchart TD
 - Панель чата **высокая**: от верхнего отступа (рядом с «Закрыть чат») до низа экрана
 - Карточки биометрии/инвентаря и т.п. торчат над панелью (`REVEALED_CARD_PEEK_PX`)
 - Эмодзи: общая кнопка `Chat/ChatEmojiButton.tsx` + lazy-чанк `EmojiPickerPanel` (~75 KB gzip только по клику)
-- Стейт: `store/privateChatStore.ts` — Mock: seed + локальный автоответ; Live: WS + серверный sync
+- Стейт: `store/privateChatStore.ts` — Live: WS + серверный sync (Redis)
 - Непрочитанные: бейдж на спрайте; тост «Кулуары · {name}»
 - Live typing: mono/neon «{Name} печатает...»
 
@@ -188,37 +189,28 @@ flowchart TD
 ## 10. Рука и карты
 
 - Свои 6 карт: персонаж, навык, биометрия, инвентарь, черта, секретная миссия (`types/card.ts`)
-- Стоя: веер `Hand/BottomHand.tsx`
-- За столом на своём ходу раскрытия: карты в HUD
-- Чужие раскрытые (inspect / вкладки кулуаров): пока из `data/mockPlayerHands.ts`
+- **Раздача:** Live — сервер `deal_hands` при `assign_roles` (колоды без повторов в комнате)
+- Карта 6 (`secret_mission`) только владельцу (`WS hand`); в public reveal / inspect **не светится**
+- Стоя: веер `Hand/BottomHand.tsx`; за столом — карты в HUD на ходу раскрытия
+- Чужие раскрытые: `revealedByPlayer` + WS `revealed_cards_sync` / `card_revealed`
 
 ---
 
-## 11. Mock vs Live и сохранение
+## 11. Live-сессия и сохранение
 
-| | Mock (New Game) | Live Session |
-|--|-----------------|--------------|
-| Старт | `gameStore.loadMockScene()` | `createSession` + WebSocket |
-| Бейдж | `MOCK` | `LIVE` / `OFF` |
-| Общий чат | локальный store | WS `chat` + Redis buffer |
-| Кулуары | клиентский `privateChatStore` (seed + автоответ) | Redis threads + WS `private_chat_*` → Helixa `POST /api/v1/game-agent/act` |
-| Руки / чужие карты | моки | те же моки |
-| Голосование / карцер | `gameStore` | UI тот же |
+Единственный игровой путь — **Live** (API + Redis + Helixa). Лобби: **New Game** → `createSession` + WS.
 
-### Persistence (v1)
-
-| Что | Поведение |
-|-----|-----------|
-| Refresh / закрыл вкладку | В лобби появляется **Continue**, если есть active pointer |
-| Live Continue | WS reconnect + `history` (публичный чат) + `private_chat_sync` (кулуары из Redis); UI-snapshot только для стола/карцера |
-| Mock Continue | Полный UI-snapshot из `localStorage` (включая кулуары) |
-| **Покинуть станцию** | Live → `POST .../finish` → Postgres; чистит active pointer |
-| **History** | Список finished-сессий + лог событий |
-| Кулуары на сервере | Live: Redis `bunker:room:{id}:private:{human}:{agent}` + personal WS |
+| | Live |
+|--|------|
+| Старт | `createSession` + WebSocket |
+| Кулуары | Redis + WS → Helixa `/act` |
+| Руки | Redis + WS `hand` / `reveal_card` |
+| Continue | WS reconnect + Redis; UI-snapshot для стола/карцера |
+| Leave | `POST .../finish` |
 
 Ключи: `turing_active_session`, `turing_ui_snapshot:{roomId}` — см. `store/sessionPersistence.ts`.
 
-Live private protocol: outbound `private_chat_send`; inbound `private_chat_typing` / `private_chat_message` / `private_chat_sync`. Typing UI: «{Name} печатает...».
+Live private protocol: outbound `private_chat_send`; inbound `private_chat_typing` / `private_chat_message` / `private_chat_sync`.
 
 ---
 
@@ -238,7 +230,8 @@ Live private protocol: outbound `private_chat_send`; inbound `private_chat_typin
 | Стор кулуаров | `store/privateChatStore.ts` |
 | Persistence | `store/sessionPersistence.ts`, `api/sessions.ts` |
 | История матчей | `components/SessionHistoryScreen.tsx` |
-| Персонажи / фазы / мок-руки | `data/characters.ts`, `gamePhaseConfig.ts`, `mockPlayerHands.ts` |
+| Персонажи / фазы | `data/characters.ts`, `gamePhaseConfig.ts` |
+| Маппинг руки с API | `data/cardDecks.ts` (`mapBackendHandCard`) |
 | Ассеты | `config/assets.ts` → `public/assets/` |
 
 **Не в живом дереве `App`/`GameScene`:** `ActionBar`, `ChatBox`, `RoundTablePhase/*` (кроме кусков вроде TurnIndicator у руки) — прототипы / legacy.
@@ -249,12 +242,12 @@ Live private protocol: outbound `private_chat_send`; inbound `private_chat_typin
 
 Предлагаемые вопросы к команде (чтобы не расползтись):
 
-1. **Кулуары** — Live: Redis/WS + Helixa act (сделано); Mock остаётся локальным.
+1. **Кулуары** — Live: Redis/WS + Helixa act (сделано).
 2. **«Ударить»** — suspicion / мини-конфликт / только VFX / убрать до дизайна механики?
-3. **Источник правды по картам** — серверные руки vs текущие моки в `mockPlayerHands`.
+3. **Колоды карт** — расширять в `app/services/card_deal.py` (сервер — источник правды).
 4. **Один scene-graph** (`GameScene`) vs отдельные роуты/экраны при росте контента.
 5. **RECESS** — жёсткое правило «только приват» оставляем как продукт или смягчаем?
-6. **Legacy `RoundTablePhase` / `docs_frontend.md`** — удалить, архивировать или довести как альтернативный HUD?
+6. **Legacy `RoundTablePhase` / `ActionBar` / `docs_frontend.md`** — удалить, архивировать или довести как альтернативный HUD?
 
 ---
 

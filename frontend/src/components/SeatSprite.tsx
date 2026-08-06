@@ -1,6 +1,12 @@
 import { motion } from 'framer-motion';
+import { useState } from 'react';
 
 import { playUiSound } from '@/audio/uiSounds';
+import {
+  PlayerFootOval,
+  playerMarkTone,
+  playerNameplateClass,
+} from '@/components/PlayerTargetMark';
 import { PrivateMessageBadge } from '@/components/PrivateChat/PrivateMessageBadge';
 import { seatSprite } from '@/config/assets';
 import { genderLabel } from '@/data/characters';
@@ -17,6 +23,8 @@ interface SeatSpriteProps {
   selected?: boolean;
   onSelect?: (id: string) => void;
   onOpenPrivateChat?: (id: string, anchor: DOMRect) => void;
+  /** Клик по своему месту — встать из-за стола */
+  onStandUp?: () => void;
 }
 
 /** % ширины группы сцены на один спрайт стула — см. SEAT_BASE_WIDTH в seatPositions.ts */
@@ -36,7 +44,9 @@ export function SeatSprite({
   selected = false,
   onSelect,
   onOpenPrivateChat,
+  onStandUp,
 }: SeatSpriteProps) {
+  const [hovered, setHovered] = useState(false);
   const unreadCount = usePrivateChatStore((s) => s.unread[player.id] ?? 0);
   const src = seatSprite(seatNumber, player.characterId, player.is_alive);
   const suspicion = player.suspicion_score;
@@ -44,6 +54,13 @@ export function SeatSprite({
   const highSuspicion = suspicion >= 50 && player.is_alive;
   const width = BASE_WIDTH_PERCENT * layout.scale;
   const displayZIndex = unreadCount > 0 ? zIndex + 25 : zIndex;
+  const canHover = !isSelf && player.is_alive && !onStandUp;
+  const markTone = playerMarkTone({
+    isSelf,
+    alive: player.is_alive,
+    hovered: canHover && hovered,
+    selected: Boolean(selected && !isSelf && player.is_alive),
+  });
 
   return (
     <motion.button
@@ -61,20 +78,30 @@ export function SeatSprite({
         opacity: 1,
         filter: player.is_alive ? 'grayscale(0)' : 'grayscale(0.85) brightness(0.65)',
       }}
-      whileHover={player.is_alive ? { opacity: 0.95 } : undefined}
+      onMouseEnter={() => {
+        if (canHover) setHovered(true);
+      }}
+      onMouseLeave={() => setHovered(false)}
       onClick={(event) => {
         if (!player.is_alive) return;
-        playUiSound('character');
-        if (onOpenPrivateChat) {
-          onOpenPrivateChat(player.id, event.currentTarget.getBoundingClientRect());
+        playUiSound(onStandUp ? 'table' : 'character');
+        if (onStandUp) {
+          onStandUp();
           return;
         }
         onSelect?.(player.id);
+        if (onOpenPrivateChat) {
+          onOpenPrivateChat(player.id, event.currentTarget.getBoundingClientRect());
+        }
       }}
-      aria-label={`${player.name}, ${genderLabel(player.gender)}`}
+      aria-label={
+        onStandUp
+          ? 'Встать из-за стола'
+          : `${player.name}, ${genderLabel(player.gender)}`
+      }
     >
       <motion.div
-        className={`relative ${selected ? 'rounded-lg ring-2 ring-bunker-danger ring-offset-1 ring-offset-transparent' : ''} ${isSelf ? 'drop-shadow-[0_0_10px_rgba(57,255,20,0.55)]' : ''}`}
+        className={`relative ${isSelf ? 'drop-shadow-[0_0_4px_rgba(57,255,20,0.35)]' : ''}`}
         animate={
           criticalSuspicion
             ? { x: [0, -2, 2, 0] }
@@ -88,7 +115,8 @@ export function SeatSprite({
             : { duration: 1.5, repeat: Infinity }
         }
       >
-        <div className="relative w-full">
+        <PlayerFootOval tone={markTone} />
+        <div className="relative z-[1] w-full">
           {!isSelf && player.is_alive && (
             <PrivateMessageBadge count={unreadCount} variant="seated" />
           )}
@@ -100,13 +128,9 @@ export function SeatSprite({
           />
         </div>
 
-        <div className="absolute bottom-0 left-1/2 w-[130%] -translate-x-1/2 translate-y-full pt-0.5 text-center">
-          <span className="inline-block whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-display text-[9px] font-semibold text-bunker-text backdrop-blur-sm sm:text-[10px]">
+        <div className="absolute bottom-0 left-1/2 z-[1] w-[130%] -translate-x-1/2 translate-y-full pt-0.5 text-center">
+          <span className={playerNameplateClass(isSelf ? 'idle' : markTone)}>
             {player.name}
-            <span className="ml-1 font-mono text-bunker-muted">{genderLabel(player.gender)}</span>
-            {isSelf && (
-              <span className="ml-1 font-mono text-bunker-neon">{player.age}л</span>
-            )}
           </span>
         </div>
 
@@ -135,20 +159,64 @@ export function SeatSprite({
   );
 }
 
+interface EmptySeatSpriteProps {
+  seatNumber: number;
+  layout: SeatLayout;
+  zIndex: number;
+  onClick?: () => void;
+  /** Hover lift + clickable */
+  interactive?: boolean;
+}
+
 export function EmptySeatSprite({
   seatNumber,
   layout,
   zIndex,
-}: {
-  seatNumber: number;
-  layout: SeatLayout;
-  zIndex: number;
-}) {
+  onClick,
+  interactive = false,
+}: EmptySeatSpriteProps) {
   const width = BASE_WIDTH_PERCENT * layout.scale;
+
+  if (interactive) {
+    return (
+      <div
+        className="pointer-events-auto absolute"
+        style={{
+          left: `${layout.x}%`,
+          top: `${layout.y}%`,
+          width: `${width}%`,
+          zIndex,
+          ...SEAT_ANCHOR_STYLE,
+        }}
+      >
+        <motion.button
+          type="button"
+          className="block w-full cursor-pointer focus:outline-none"
+          initial={false}
+          animate={{ y: 0, filter: 'brightness(1)' }}
+          whileHover={{ y: -12, filter: 'brightness(1.12)' }}
+          whileTap={{ y: -5, scale: 0.98 }}
+          transition={{ type: 'spring', stiffness: 420, damping: 22 }}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClick?.();
+          }}
+          aria-label={`Стул ${seatNumber}`}
+        >
+          <img
+            src={seatSprite(seatNumber, null, false)}
+            alt=""
+            className="pointer-events-none h-auto w-full select-none drop-shadow-[0_6px_12px_rgba(0,0,0,0.4)]"
+            draggable={false}
+          />
+        </motion.button>
+      </div>
+    );
+  }
 
   return (
     <div
-      className="absolute"
+      className="pointer-events-none absolute"
       style={{
         left: `${layout.x}%`,
         top: `${layout.y}%`,

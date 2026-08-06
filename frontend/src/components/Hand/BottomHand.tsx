@@ -39,10 +39,6 @@ export function BottomHand({
   const [handZoneHovered, setHandZoneHovered] = useState(false);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
 
-  if (cards.length !== HAND_SIZE) {
-    console.warn(`BottomHand expects ${HAND_SIZE} cards, got ${cards.length}`);
-  }
-
   const hand = cards.slice(0, HAND_SIZE);
   const inspectOpen = selectedCardId !== null;
 
@@ -52,6 +48,15 @@ export function BottomHand({
   );
 
   const closeInspect = () => setSelectedCardId(null);
+
+  // Wait for server hand (WS `hand`) — hooks above must always run
+  if (cards.length === 0) {
+    return null;
+  }
+
+  if (cards.length !== HAND_SIZE) {
+    console.warn(`BottomHand expects ${HAND_SIZE} cards, got ${cards.length}`);
+  }
 
   return (
     <LayoutGroup id="player-hand">

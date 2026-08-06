@@ -19,14 +19,15 @@ from app.event_bus import event_bus
 from app.mock_agent import ensure_mock_agents
 from app.models import GameSession, SessionStatus
 from app.redis_state import redis_store
-from app.schemas import Phase
+from app.schemas import Phase, room_state_for_client
+from app.services.card_deal import public_card_view
 from app.services.helixa_adapter import request_private_reply
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
 
-ALLOWED_ACTIONS = {"chat", "pitch", "vote", "phase", "private_chat_send"}
+ALLOWED_ACTIONS = {"chat", "pitch", "vote", "phase", "private_chat_send", "reveal_card"}
 
 
 async def _session_is_finished(room_id: str) -> bool:
@@ -51,6 +52,105 @@ def _inbound_action(data: dict[str, Any]) -> str:
         if isinstance(raw, str) and raw.strip():
             return raw.strip().lower()
     return ""
+
+
+async def _send_hand(room_id: str, client_id: str) -> None:
+    hand = await redis_store.ensure_hand(room_id, client_id)
+    if hand is None:
+        return
+    await manager.send_personal(
+        room_id,
+        client_id,
+        {
+            "type": "hand",
+            "room_id": room_id,
+            "client_id": client_id,
+            "cards": hand,
+            "ts": _now_iso(),
+        },
+    )
+
+
+async def _send_revealed_sync(room_id: str, client_id: str) -> None:
+    by_player = await redis_store.public_revealed_by_player(room_id)
+    await manager.send_personal(
+        room_id,
+        client_id,
+        {
+            "type": "revealed_cards_sync",
+            "room_id": room_id,
+            "client_id": client_id,
+            "by_player": by_player,
+            "ts": _now_iso(),
+        },
+    )
+
+
+async def _handle_reveal_card(
+    room_id: str, client_id: str, data: dict[str, Any]
+) -> None:
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    card_id = str(payload.get("card_id") or data.get("card_id") or "").strip()
+    if not card_id:
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "reveal_card requires card_id",
+                "ts": _now_iso(),
+            },
+        )
+        return
+
+    card, err = await redis_store.reveal_card_in_hand(room_id, client_id, card_id)
+    if err or card is None:
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": f"reveal_card failed: {err or 'unknown'}",
+                "ts": _now_iso(),
+            },
+        )
+        return
+
+    # Only the owner can reveal; card always loaded from their Redis hand.
+    await _send_hand(room_id, client_id)
+
+    if card.get("type") == "secret_mission":
+        # Mark locally for owner, never broadcast / never persist to public events
+        return
+
+    state = await redis_store.get_room(room_id)
+    player = state.players.get(client_id) if state else None
+    character_id = player.character_id if player else None
+    public = public_card_view(card)
+    if public is None:
+        return
+
+    msg = {
+        "type": "card_revealed",
+        "room_id": room_id,
+        "client_id": client_id,
+        "character_id": character_id,
+        "card": public,
+        "ts": _now_iso(),
+    }
+    await manager.broadcast(room_id, msg)
+    await redis_store.append_event(
+        room_id,
+        {
+            "user_id": client_id,
+            "is_ai": bool(player and player.is_ai),
+            "action_type": "reveal_card",
+            "raw_payload": msg,
+            "timestamp": msg["ts"],
+        },
+    )
 
 
 async def _send_private_sync(room_id: str, client_id: str) -> None:
@@ -156,7 +256,8 @@ async def _private_agent_reply(
             phase=state.phase,
             private_thread=thread,
             personality_hint=agent.role if agent else None,
-            is_ai_agent=bool(agent and agent.is_ai),
+            character_id=agent.character_id if agent else None,
+            faction=agent.faction if agent else None,
         )
 
         ts = _now_iso()
@@ -261,7 +362,7 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
             "type": "state",
             "room_id": room_id,
             "client_id": client_id,
-            "state": state.model_dump(mode="json"),
+            "state": room_state_for_client(state),
             "ts": _now_iso(),
         },
     )
@@ -284,6 +385,8 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
 
     # Private threads for this human (authority = Redis)
     await _send_private_sync(room_id, client_id)
+    await _send_hand(room_id, client_id)
+    await _send_revealed_sync(room_id, client_id)
 
     if not is_reconnect:
         join_msg = {
@@ -339,6 +442,10 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
                 await _handle_private_chat_send(room_id, client_id, data)
                 continue
 
+            if action == "reveal_card":
+                await _handle_reveal_card(room_id, client_id, data)
+                continue
+
             if action == "phase":
                 phase_name = str(data.get("text") or data.get("phase") or "").strip()
                 try:
@@ -361,7 +468,7 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
                     "room_id": room_id,
                     "client_id": client_id,
                     "phase": state.phase.value,
-                    "state": state.model_dump(mode="json"),
+                    "state": room_state_for_client(state),
                     "ts": _now_iso(),
                 }
                 await manager.broadcast(room_id, out)

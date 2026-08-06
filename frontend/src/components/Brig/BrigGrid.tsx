@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { ASSETS, hasCharacterCard } from '@/config/assets';
 import { BRIG_CAPACITY } from '@/data/gamePhaseConfig';
@@ -21,7 +22,7 @@ function BrigSlot({
 
   return (
     <div
-      className={`flex h-[88px] w-[72px] flex-col items-center justify-end rounded-xl border-2 border-dashed pb-2 sm:h-[96px] sm:w-20 ${
+      className={`pointer-events-none flex h-[88px] w-[72px] flex-col items-center justify-end rounded-xl border-2 border-dashed pb-2 sm:h-[96px] sm:w-20 ${
         characterId
           ? 'border-red-500/40 bg-red-950/30'
           : 'border-white/15 bg-black/20'
@@ -56,10 +57,13 @@ function BrigSlot({
 interface BrigGridProps {
   brigCharacterIds: string[];
   players: Player[];
+  onOpen?: () => void;
 }
 
-/** Сетка карцера — сюда попадают изгнанные chibi (до 3 слотов) */
-export function BrigGrid({ brigCharacterIds, players }: BrigGridProps) {
+/** Сетка карцера — portal + явное WoW-вдавливание */
+export function BrigGrid({ brigCharacterIds, players, onOpen }: BrigGridProps) {
+  const [pressed, setPressed] = useState(false);
+
   const slots = Array.from({ length: BRIG_CAPACITY }, (_, index) => {
     const characterId = brigCharacterIds[index] ?? null;
     const player = characterId
@@ -70,10 +74,53 @@ export function BrigGrid({ brigCharacterIds, players }: BrigGridProps) {
 
   const occupied = brigCharacterIds.length;
 
-  return (
-    <div className="pointer-events-none absolute right-4 top-16 z-[8] sm:top-[4.5rem]">
-      <div className="rounded-2xl border border-red-500/25 bg-black/35 px-3 py-2.5 backdrop-blur-md">
-        <p className="mb-2 text-center font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-red-400/90">
+  const press = useCallback(() => setPressed(true), []);
+  const release = useCallback(() => setPressed(false), []);
+
+  useEffect(() => {
+    if (!pressed) return;
+    const up = () => setPressed(false);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('blur', up);
+    return () => {
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('blur', up);
+    };
+  }, [pressed]);
+
+  const node = (
+    <div
+      data-brig-widget
+      style={{
+        position: 'fixed',
+        right: 16,
+        top: 12,
+        zIndex: 10000,
+        pointerEvents: 'auto',
+      }}
+    >
+      <button
+        type="button"
+        data-pressed={pressed ? 'true' : 'false'}
+        aria-label={`Карцер ${occupied} из ${BRIG_CAPACITY}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpen?.();
+        }}
+        onMouseDown={(event) => {
+          if (event.button !== 0) return;
+          event.stopPropagation();
+          press();
+        }}
+        onMouseUp={(event) => {
+          event.stopPropagation();
+          release();
+        }}
+        onMouseLeave={release}
+        onBlur={release}
+        className="brig-wow-btn select-none rounded-xl px-3 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60"
+      >
+        <p className="mb-2 text-center font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-red-300">
           Карцер · {occupied}/{BRIG_CAPACITY}
         </p>
         <div className="flex gap-2">
@@ -85,7 +132,10 @@ export function BrigGrid({ brigCharacterIds, players }: BrigGridProps) {
             />
           ))}
         </div>
-      </div>
+      </button>
     </div>
   );
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(node, document.body);
 }

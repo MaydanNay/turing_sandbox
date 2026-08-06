@@ -1,30 +1,53 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { finishSession, fetchSession } from '@/api/sessions';
+import { ChatToastStack } from '@/components/Chat/ChatToastStack';
 import { GameScene } from '@/components/GameScene';
 import { LobbyScreen } from '@/components/LobbyScreen';
 import { SessionHistoryScreen } from '@/components/SessionHistoryScreen';
 import { playChatSendSoundEffect } from '@/hooks/useGeneralChatEffects';
 import { useWebSocket } from '@/providers/WebSocketProvider';
+import { useChatNotificationStore } from '@/store/chatNotificationStore';
 import { useGameStore } from '@/store/gameStore';
+import { useOutpostMovementStore } from '@/store/outpostMovementStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import {
   clearAllSessionPersistence,
   flushUiSnapshotSave,
   loadActiveSession,
   loadUiSnapshot,
+  saveActiveSession,
   scheduleUiSnapshotSave,
   type PersistMode,
   type UiSnapshot,
 } from '@/store/sessionPersistence';
 
-type AppMode = 'lobby' | 'history' | 'mock' | 'live';
+type AppMode = 'lobby' | 'history' | 'live';
+
+function pushMatchOutcomeToast(winningTeam: string | null | undefined): void {
+  const team = (winningTeam ?? '').toUpperCase();
+  if (team === 'HUMAN') {
+    useChatNotificationStore.getState().push({
+      kind: 'general',
+      title: 'Итог матча',
+      body: 'Люди победили — все синтетики в карцере.',
+    });
+    return;
+  }
+  if (team === 'SYNTHETICS') {
+    useChatNotificationStore.getState().push({
+      kind: 'general',
+      title: 'Итог матча',
+      body: 'Синтетики уцелели — не все инфильтраторы изолированы.',
+    });
+  }
+}
 
 function buildSnapshot(mode: PersistMode): UiSnapshot | null {
   const game = useGameStore.getState();
   const privateChat = usePrivateChatStore.getState();
   if (!game.roomId || !game.clientId) return null;
-  if (mode !== 'mock' && mode !== 'live') return null;
+  if (mode !== 'live') return null;
 
   return {
     roomId: game.roomId,
@@ -32,17 +55,31 @@ function buildSnapshot(mode: PersistMode): UiSnapshot | null {
     clientId: game.clientId,
     gameState: game.gameState,
     gatheredAtTable: game.gatheredAtTable,
+    seatedPlayerIds: game.seatedPlayerIds,
+    meetingCallsUsed: game.meetingCallsUsed,
+    lastMeetingCallAt: game.lastMeetingCallAt,
     brigCharacterIds: game.brigCharacterIds,
     votes: game.votes,
     sessionAges: game.sessionAges,
     players: game.players,
     chat: game.chat,
     myProfile: game.myProfile,
+    myHand: game.myHand,
+    revealedByPlayer: game.revealedByPlayer,
     privateThreads: privateChat.threads,
     privateUnread: privateChat.unread,
     privateSeeded: privateChat.seededPartners,
+    outpostPositions: useOutpostMovementStore.getState().positions,
     updatedAt: Date.now(),
   };
+}
+
+function hydrateOutpostFromSnapshot(snap: UiSnapshot | null): void {
+  if (!snap?.outpostPositions || Object.keys(snap.outpostPositions).length === 0) {
+    useOutpostMovementStore.getState().sanitizeAllPositions();
+    return;
+  }
+  useOutpostMovementStore.getState().hydratePositions(snap.outpostPositions);
 }
 
 export default function App() {
@@ -63,72 +100,30 @@ export default function App() {
   const roomId = useGameStore((s) => s.roomId);
   const clientId = useGameStore((s) => s.clientId);
   const error = useGameStore((s) => s.error);
-  const loadMockScene = useGameStore((s) => s.loadMockScene);
   const gatheredAtTable = useGameStore((s) => s.gatheredAtTable);
+  const seatedPlayerIds = useGameStore((s) => s.seatedPlayerIds);
+  const meetingCallsUsed = useGameStore((s) => s.meetingCallsUsed);
   const gatherAtTable = useGameStore((s) => s.gatherAtTable);
+  const leaveTable = useGameStore((s) => s.leaveTable);
+  const sitSelf = useGameStore((s) => s.sitSelf);
+  const standSelf = useGameStore((s) => s.standSelf);
   const prepareLiveSession = useGameStore((s) => s.prepareLiveSession);
-  const addChatMessage = useGameStore((s) => s.addChatMessage);
-  const setTyping = useGameStore((s) => s.setTyping);
   const applyUiSnapshot = useGameStore((s) => s.applyUiSnapshot);
-  const restoreMockSnapshot = useGameStore((s) => s.restoreMockSnapshot);
   const brigCharacterIds = useGameStore((s) => s.brigCharacterIds);
   const votes = useGameStore((s) => s.votes);
   const privateThreads = usePrivateChatStore((s) => s.threads);
   const privateUnread = usePrivateChatStore((s) => s.unread);
 
-  // Probe whether Continue should show
+  // Debounced UI snapshot while in a live match
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const active = loadActiveSession();
-      if (!active) {
-        if (!cancelled) {
-          setCanContinue(false);
-          setBootChecked(true);
-        }
-        return;
-      }
-
-      if (active.mode === 'mock') {
-        const snap = loadUiSnapshot(active.roomId);
-        if (!cancelled) {
-          setCanContinue(Boolean(snap));
-          setBootChecked(true);
-        }
-        return;
-      }
-
-      // Live: Continue only if server says resumable (Redis still alive).
-      // Do NOT fall back to snapshot-only — that would recreate an empty room.
-      try {
-        const detail = await fetchSession(active.roomId);
-        if (!cancelled) {
-          setCanContinue(detail.resumable);
-          if (!detail.resumable) {
-            clearAllSessionPersistence(active.roomId);
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setCanContinue(false);
-        }
-      } finally {
-        if (!cancelled) setBootChecked(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mode]);
-
-  // Debounced UI snapshot while in a match
-  useEffect(() => {
-    if (mode !== 'mock' && mode !== 'live') return;
-    scheduleUiSnapshotSave(() => buildSnapshot(mode));
+    if (mode !== 'live') return;
+    scheduleUiSnapshotSave(() => buildSnapshot('live'));
   }, [
     mode,
     gameState,
     gatheredAtTable,
+    seatedPlayerIds,
+    meetingCallsUsed,
     chat.length,
     players,
     brigCharacterIds,
@@ -140,16 +135,14 @@ export default function App() {
     myProfile,
   ]);
 
-  // Immediate pointer+snapshot when entering a match (don't wait for debounce)
   useEffect(() => {
-    if (mode !== 'mock' && mode !== 'live') return;
-    flushUiSnapshotSave(() => buildSnapshot(mode));
+    if (mode !== 'live') return;
+    flushUiSnapshotSave(() => buildSnapshot('live'));
   }, [mode, roomId, clientId]);
 
-  // Flush snapshot before tab close / refresh so Continue sees latest state
   useEffect(() => {
-    if (mode !== 'mock' && mode !== 'live') return;
-    const flush = () => flushUiSnapshotSave(() => buildSnapshot(mode));
+    if (mode !== 'live') return;
+    const flush = () => flushUiSnapshotSave(() => buildSnapshot('live'));
     window.addEventListener('pagehide', flush);
     window.addEventListener('beforeunload', flush);
     return () => {
@@ -158,53 +151,43 @@ export default function App() {
     };
   }, [mode]);
 
-  const handleJoinMock = useCallback(() => {
-    clearAllSessionPersistence();
-    setLobbyError(null);
-    loadMockScene();
-    setMode('mock');
-  }, [loadMockScene]);
-
   const handleJoinLive = useCallback(
     (rid: string, cid: string) => {
       clearAllSessionPersistence();
       setLobbyError(null);
       prepareLiveSession(rid, cid);
+      saveActiveSession({
+        mode: 'live',
+        roomId: rid,
+        clientId: cid,
+        updatedAt: Date.now(),
+      });
       connect(rid, cid);
       setMode('live');
     },
     [connect, prepareLiveSession],
   );
 
-  const handleContinue = useCallback(async () => {
+  const resumeLiveSession = useCallback(async (): Promise<boolean> => {
     const active = loadActiveSession();
-    if (!active) return;
+    if (!active || active.mode !== 'live') {
+      if (active) clearAllSessionPersistence(active.roomId);
+      setCanContinue(false);
+      return false;
+    }
     const snap = loadUiSnapshot(active.roomId);
     setLobbyError(null);
 
-    if (active.mode === 'mock') {
-      if (!snap) {
-        setCanContinue(false);
-        return;
-      }
-      restoreMockSnapshot(snap);
-      setMode('mock');
-      return;
-    }
-
-    // Live: re-check Redis before reconnecting
     try {
       const detail = await fetchSession(active.roomId);
       if (!detail.resumable) {
         clearAllSessionPersistence(active.roomId);
         setCanContinue(false);
-        setLobbyError('Сессия больше недоступна. Начните Live Session заново.');
-        return;
+        setLobbyError('Сессия больше недоступна. Начните New Game заново.');
+        return false;
       }
     } catch {
-      setCanContinue(false);
-      setLobbyError('Сервер недоступен. Нельзя продолжить Live Session.');
-      return;
+      // Keep trying reconnect with stored pointer; WS may still work
     }
 
     useGameStore.setState({
@@ -215,36 +198,77 @@ export default function App() {
       typing: [],
       error: null,
       sessionAges: snap?.sessionAges ?? useGameStore.getState().sessionAges,
-      brigCharacterIds: [],
-      votes: {},
+      brigCharacterIds: snap?.brigCharacterIds ?? [],
+      votes: snap?.votes ?? {},
+      gatheredAtTable: snap?.gatheredAtTable ?? false,
+      seatedPlayerIds: snap?.seatedPlayerIds ?? [],
     });
+    hydrateOutpostFromSnapshot(snap);
     usePrivateChatStore.getState().reset();
     usePrivateChatStore.getState().setLiveMode(true);
     connect(active.roomId, active.clientId);
     setMode('live');
-  }, [connect, restoreMockSnapshot]);
+    setCanContinue(true);
+    return true;
+  }, [connect]);
 
-  // Overlay UI snapshot after live room state arrives
+  const handleContinue = useCallback(async () => {
+    await resumeLiveSession();
+  }, [resumeLiveSession]);
+
+  // Boot: auto-resume on refresh
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const active = loadActiveSession();
+      if (!active || active.mode !== 'live') {
+        if (active) clearAllSessionPersistence(active.roomId);
+        if (!cancelled) {
+          setCanContinue(false);
+          setBootChecked(true);
+        }
+        return;
+      }
+
+      const ok = await resumeLiveSession();
+      if (cancelled) return;
+      if (!ok) setCanContinue(false);
+      setBootChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (mode !== 'live' || !connected || !roomId) return;
     const snap = loadUiSnapshot(roomId);
-    if (snap) applyUiSnapshot(snap);
+    if (snap) applyUiSnapshot(snap, { restoreGathered: true });
   }, [mode, connected, roomId, applyUiSnapshot]);
+
+  // Persist standing positions as they change
+  useEffect(() => {
+    if (mode !== 'live') return;
+    return useOutpostMovementStore.subscribe(() => {
+      scheduleUiSnapshotSave(() => buildSnapshot('live'));
+    });
+  }, [mode]);
 
   const handleLeave = useCallback(async () => {
     const game = useGameStore.getState();
     const rid = game.roomId;
-    const currentMode = mode;
 
-    flushUiSnapshotSave(() => buildSnapshot(currentMode === 'mock' ? 'mock' : 'live'));
+    flushUiSnapshotSave(() => buildSnapshot('live'));
 
-    if (currentMode === 'live' && rid) {
+    if (mode === 'live' && rid) {
       try {
         const isResolve = game.gameState === 'RESOLVE';
-        await finishSession(rid, {
+        const result = await finishSession(rid, {
           winningTeam: isResolve ? 'DRAW' : 'ABORTED',
           brigAgents: game.brigCharacterIds,
         });
+        pushMatchOutcomeToast(result.winning_team);
       } catch {
         // Still leave locally even if finish fails (room may already be gone)
       }
@@ -253,6 +277,7 @@ export default function App() {
 
     clearAllSessionPersistence(rid);
     useGameStore.getState().reset();
+    useOutpostMovementStore.getState().reset();
     usePrivateChatStore.getState().reset();
     setSelectedPlayerId(null);
     setCanContinue(false);
@@ -262,53 +287,64 @@ export default function App() {
 
   const handleSendChat = useCallback(
     (text: string) => {
-      if (mode === 'mock') {
-        addChatMessage({
-          sender: myProfile?.name ?? 'Вы',
-          text,
-          timestamp: new Date().toISOString(),
-        });
-        setTyping(myProfile?.name ?? 'Вы');
-        return;
-      }
       playChatSendSoundEffect();
       send({ action: 'chat', text });
     },
-    [mode, send, addChatMessage, myProfile, setTyping],
+    [send],
   );
 
   const handleSendPrivate = useCallback(
     (agentId: string, partnerName: string, text: string) => {
       usePrivateChatStore.getState().sendMessage(agentId, partnerName, text);
-      if (mode === 'live') {
-        send({
-          action: 'private_chat_send',
-          type: 'private_chat_send',
-          text,
-          agent_id: agentId,
-          payload: { agent_id: agentId },
-        });
-      }
+      send({
+        action: 'private_chat_send',
+        type: 'private_chat_send',
+        text,
+        agent_id: agentId,
+        payload: { agent_id: agentId },
+      });
     },
-    [mode, send],
+    [send],
+  );
+
+  const handleRevealCard = useCallback(
+    (cardId: string) => {
+      send({
+        action: 'reveal_card',
+        type: 'reveal_card',
+        card_id: cardId,
+        payload: { card_id: cardId },
+      });
+    },
+    [send],
   );
 
   if (mode === 'history') {
-    return <SessionHistoryScreen onBack={() => setMode('lobby')} />;
+    return (
+      <>
+        <ChatToastStack />
+        <SessionHistoryScreen onBack={() => setMode('lobby')} />
+      </>
+    );
   }
 
-  if (!bootChecked || mode === 'lobby') {
+  if (mode === 'lobby') {
+    if (!bootChecked) {
+      return <div className="min-h-screen bg-black" aria-busy aria-label="Загрузка сессии" />;
+    }
     return (
-      <LobbyScreen
-        onJoinMock={handleJoinMock}
-        onJoinLive={handleJoinLive}
-        onContinue={() => {
-          void handleContinue();
-        }}
-        onOpenHistory={() => setMode('history')}
-        canContinue={canContinue}
-        error={lobbyError ?? error}
-      />
+      <>
+        <ChatToastStack />
+        <LobbyScreen
+          onJoinLive={handleJoinLive}
+          onContinue={() => {
+            void handleContinue();
+          }}
+          onOpenHistory={() => setMode('history')}
+          canContinue={canContinue}
+          error={lobbyError ?? error}
+        />
+      </>
     );
   }
 
@@ -317,18 +353,23 @@ export default function App() {
       gameState={gameState}
       players={players}
       gatheredAtTable={gatheredAtTable}
+      seatedPlayerIds={seatedPlayerIds}
+      onSitSelf={sitSelf}
+      onStandSelf={standSelf}
       onGatherAtTable={gatherAtTable}
+      onLeaveTable={leaveTable}
       chat={chat}
       typing={typing}
       myProfile={myProfile}
       connected={connected}
       roomId={roomId}
       clientId={clientId}
-      mockMode={mode === 'mock'}
+      mockMode={false}
       selectedPlayerId={selectedPlayerId}
       onSelectPlayer={setSelectedPlayerId}
       onSendChat={handleSendChat}
       onSendPrivate={handleSendPrivate}
+      onRevealCard={handleRevealCard}
       onLeave={handleLeave}
     />
   );

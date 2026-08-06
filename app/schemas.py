@@ -18,9 +18,18 @@ class Phase(str, Enum):
     finished = "Finished"
 
 
+class Faction(str, Enum):
+    """System ground-truth team. Never shown to players or agent-facing prompts."""
+
+    human = "HUMAN"
+    synthetic = "SYNTHETIC"
+
+
 class PlayerInfo(BaseModel):
     client_id: str
-    role: str | None = None
+    role: str | None = None  # profession: Врач / Инженер / …
+    character_id: str | None = None  # canonical avatar: vance / cole / …
+    faction: Faction | None = None  # HUMAN | SYNTHETIC — system-only
     is_ai: bool = False
     connected: bool = True
 
@@ -32,6 +41,16 @@ class RoomState(BaseModel):
     phase_deadline_ts: float | None = None
     players: dict[str, PlayerInfo] = Field(default_factory=dict)
     roles_assigned: bool = False
+    hands_dealt: bool = False
+
+
+def room_state_for_client(state: RoomState) -> dict[str, Any]:
+    """Serialize room for WS/HTTP clients without leaking faction."""
+    data = state.model_dump(mode="json")
+    for player in data.get("players", {}).values():
+        if isinstance(player, dict):
+            player.pop("faction", None)
+    return data
 
 
 class WsInboundMessage(BaseModel):
@@ -81,6 +100,10 @@ class SessionFinishResponse(BaseModel):
     status: str
     events_persisted: int
     winner_id: str | None = None
+    winning_team: str | None = Field(
+        default=None,
+        description="Server-derived: HUMAN | SYNTHETICS | ABORTED | DRAW",
+    )
 
 
 class SessionSummary(BaseModel):
