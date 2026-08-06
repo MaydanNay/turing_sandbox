@@ -19,6 +19,8 @@
   cd /home/diana/progects/turing_sandbox
   docker compose down  
 
+> **UI / как выглядит игра (для фронта и масштабирования):** [docs/GAME_UI.md](docs/GAME_UI.md)
+
 # Turing Sandbox — «Бункер» (MVP Backend)
 
 Скелет бэкенда для реалтайм-игры «Бункер»: FastAPI + PostgreSQL + Redis + WebSockets + mock-агенты Helixa.

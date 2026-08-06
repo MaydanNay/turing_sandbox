@@ -34,6 +34,7 @@ const BACKEND_PHASE_MAP: Record<string, GamePhase> = {
   Revision: 'REVISION',
   Turing: 'TURING',
   Vote: 'VOTE',
+  Resolve: 'RESOLVE',
   Finished: 'RESOLVE',
 };
 
@@ -50,7 +51,7 @@ export function mapFrontendPhase(phase: GamePhase): string {
     REVISION: 'Revision',
     TURING: 'Turing',
     VOTE: 'Vote',
-    RESOLVE: 'Finished',
+    RESOLVE: 'Resolve',
   };
   return reverse[phase];
 }

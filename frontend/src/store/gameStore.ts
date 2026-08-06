@@ -7,6 +7,7 @@ import {
 } from '@/data/characters';
 import { MATCH_PHASE_ORDER, getPhaseMeta } from '@/data/gamePhaseConfig';
 import type {
+  BackendHistoryEvent,
   BackendRoomState,
   BackendWsMessage,
   ChatMessage,
@@ -21,6 +22,8 @@ import { revealTypeLabel, toRevealCardPayload } from '@/utils/cardArt';
 import { clampSuspicion } from '@/utils/seatPositions';
 import { useChatNotificationStore } from '@/store/chatNotificationStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
+import type { UiSnapshot } from '@/store/sessionPersistence';
+import { loadUiSnapshot } from '@/store/sessionPersistence';
 
 interface GameStore {
   roomId: string | null;
@@ -59,6 +62,9 @@ interface GameStore {
   cycleMockPhase: () => void;
   gatherAtTable: () => void;
   castVoteToBrig: (targetCharacterId: string) => void;
+  applyHistoryEvents: (events: BackendHistoryEvent[]) => void;
+  applyUiSnapshot: (snapshot: UiSnapshot) => void;
+  restoreMockSnapshot: (snapshot: UiSnapshot) => void;
   reset: () => void;
 }
 
@@ -157,6 +163,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   prepareLiveSession: (roomId, clientId) => {
     usePrivateChatStore.getState().reset();
+    usePrivateChatStore.getState().setLiveMode(true);
     useChatNotificationStore.setState({ items: [] });
     set({
       roomId,
@@ -170,11 +177,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       error: null,
       sessionAges: rollSessionAges(),
       gatheredAtTable: false,
+      brigCharacterIds: [],
+      votes: {},
     });
   },
 
   loadMockScene: () => {
     usePrivateChatStore.getState().reset();
+    usePrivateChatStore.getState().setLiveMode(false);
     useChatNotificationStore.setState({ items: [] });
     const sessionAges = rollSessionAges();
     const players = createMockPlayers(sessionAges);
@@ -237,6 +247,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     switch (msg.type) {
       case 'state':
         get().applyRoomState(msg.state, msg.client_id);
+        {
+          const snap = loadUiSnapshot(msg.room_id);
+          if (snap) get().applyUiSnapshot(snap);
+        }
+        break;
+      case 'history':
+        get().applyHistoryEvents(msg.events ?? []);
+        {
+          const snap = loadUiSnapshot(msg.room_id);
+          if (snap) get().applyUiSnapshot(snap);
+        }
         break;
       case 'phase_changed':
         get().applyRoomState(msg.state, clientId ?? undefined);
@@ -281,6 +302,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
         break;
       case 'error':
         set({ error: msg.text });
+        break;
+      case 'private_chat_typing':
+        usePrivateChatStore
+          .getState()
+          .setPartnerTyping(msg.agent_id, Boolean(msg.typing));
+        break;
+      case 'private_chat_message': {
+        if (msg.from === 'me') break;
+        const partner =
+          get().players.find((p) => p.id === msg.agent_id) ??
+          get().players.find((p) => p.id === msg.client_id);
+        const partnerName = partner?.name ?? msg.agent_id;
+        usePrivateChatStore.getState().receiveMessage(
+          msg.agent_id,
+          partnerName,
+          msg.text,
+          { timestamp: msg.ts },
+        );
+        usePrivateChatStore.getState().setPartnerTyping(msg.agent_id, false);
+        break;
+      }
+      case 'private_chat_sync':
+        usePrivateChatStore.getState().applyServerSync(msg.threads ?? {});
         break;
       default: {
         const _exhaustive: never = msg;
@@ -441,6 +485,111 @@ export const useGameStore = create<GameStore>((set, get) => ({
       sender: myProfile?.name ?? 'Вы',
       text: `Голосую отправить ${target.name} в Карцер.`,
       timestamp: new Date().toISOString(),
+    });
+  },
+
+  applyHistoryEvents: (events) => {
+    const players = get().players;
+    const myProfile = get().myProfile;
+    const lines: ChatMessage[] = [];
+
+    for (const ev of events) {
+      const action = ev.action_type ?? '';
+      const payload = (ev.raw_payload ?? {}) as Record<string, unknown>;
+      const ts =
+        (typeof ev.timestamp === 'string' && ev.timestamp) ||
+        (typeof payload.ts === 'string' && payload.ts) ||
+        new Date().toISOString();
+
+      if (action === 'join') {
+        const cid = String(payload.client_id ?? ev.user_id ?? 'unknown');
+        lines.push({
+          id: crypto.randomUUID(),
+          sender: 'Система',
+          text: `>>> ${cid}${ev.is_ai ? ' (AI)' : ''} подключился к каналу.`,
+          timestamp: ts,
+          is_ai: Boolean(ev.is_ai),
+          kind: 'system',
+        });
+        continue;
+      }
+
+      if (action === 'phase') {
+        const phase = String(payload.phase ?? 'UNKNOWN');
+        lines.push({
+          id: crypto.randomUUID(),
+          sender: 'Система',
+          text: `>>> ФАЗА: ${phase.toUpperCase()}`,
+          timestamp: ts,
+          kind: 'system',
+        });
+        continue;
+      }
+
+      if (action === 'chat' || action === 'pitch' || action === 'vote') {
+        const cid = String(payload.client_id ?? ev.user_id ?? '');
+        const player = players.find((p) => p.id === cid);
+        const senderName =
+          player?.name ??
+          (myProfile?.id === cid ? myProfile.name : cid || 'unknown');
+        const text = typeof payload.text === 'string' ? payload.text : '';
+        if (!text && action !== 'vote') continue;
+        lines.push({
+          id: crypto.randomUUID(),
+          sender: senderName,
+          text: text || `[${action}]`,
+          timestamp: ts,
+          is_ai: Boolean(ev.is_ai ?? payload.is_ai),
+        });
+      }
+    }
+
+    if (lines.length === 0) return;
+    set({ chat: lines });
+  },
+
+  applyUiSnapshot: (snapshot) => {
+    set({
+      gatheredAtTable: snapshot.gatheredAtTable,
+      brigCharacterIds: snapshot.brigCharacterIds ?? [],
+      votes: snapshot.votes ?? {},
+      sessionAges:
+        Object.keys(snapshot.sessionAges ?? {}).length > 0
+          ? snapshot.sessionAges
+          : get().sessionAges,
+    });
+    // Live private chat authority is Redis/WS sync — do not hydrate from snapshot.
+    if (snapshot.mode === 'mock') {
+      usePrivateChatStore.getState().hydrate({
+        threads: snapshot.privateThreads ?? {},
+        unread: snapshot.privateUnread ?? {},
+        seededPartners: snapshot.privateSeeded ?? {},
+      });
+    }
+  },
+
+  restoreMockSnapshot: (snapshot) => {
+    useChatNotificationStore.setState({ items: [] });
+    usePrivateChatStore.getState().setLiveMode(false);
+    set({
+      roomId: snapshot.roomId,
+      clientId: snapshot.clientId,
+      connected: false,
+      gameState: snapshot.gameState,
+      players: snapshot.players,
+      chat: snapshot.chat,
+      myProfile: snapshot.myProfile,
+      typing: [],
+      error: null,
+      sessionAges: snapshot.sessionAges,
+      gatheredAtTable: snapshot.gatheredAtTable,
+      brigCharacterIds: snapshot.brigCharacterIds ?? [],
+      votes: snapshot.votes ?? {},
+    });
+    usePrivateChatStore.getState().hydrate({
+      threads: snapshot.privateThreads ?? {},
+      unread: snapshot.privateUnread ?? {},
+      seededPartners: snapshot.privateSeeded ?? {},
     });
   },
 

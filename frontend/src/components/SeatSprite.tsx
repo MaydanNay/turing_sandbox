@@ -16,6 +16,7 @@ interface SeatSpriteProps {
   isSelf?: boolean;
   selected?: boolean;
   onSelect?: (id: string) => void;
+  onOpenPrivateChat?: (id: string, anchor: DOMRect) => void;
 }
 
 /** % ширины группы сцены на один спрайт стула — см. SEAT_BASE_WIDTH в seatPositions.ts */
@@ -34,6 +35,7 @@ export function SeatSprite({
   isSelf = false,
   selected = false,
   onSelect,
+  onOpenPrivateChat,
 }: SeatSpriteProps) {
   const unreadCount = usePrivateChatStore((s) => s.unread[player.id] ?? 0);
   const src = seatSprite(seatNumber, player.characterId, player.is_alive);
@@ -60,9 +62,13 @@ export function SeatSprite({
         filter: player.is_alive ? 'grayscale(0)' : 'grayscale(0.85) brightness(0.65)',
       }}
       whileHover={player.is_alive ? { opacity: 0.95 } : undefined}
-      onClick={() => {
+      onClick={(event) => {
         if (!player.is_alive) return;
         playUiSound('character');
+        if (onOpenPrivateChat) {
+          onOpenPrivateChat(player.id, event.currentTarget.getBoundingClientRect());
+          return;
+        }
         onSelect?.(player.id);
       }}
       aria-label={`${player.name}, ${genderLabel(player.gender)}`}

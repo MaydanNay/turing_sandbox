@@ -19,6 +19,9 @@ class ConnectionManager:
     def room_clients(self, room_id: str) -> list[str]:
         return list(self._rooms.get(room_id, {}).keys())
 
+    def get(self, room_id: str, client_id: str) -> WebSocket | None:
+        return self._rooms.get(room_id, {}).get(client_id)
+
     def human_count(self, room_id: str) -> int:
         return len(self._rooms.get(room_id, {}))
 

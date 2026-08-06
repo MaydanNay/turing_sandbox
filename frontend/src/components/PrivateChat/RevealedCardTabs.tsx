@@ -21,7 +21,7 @@ const TAB_W = 112 * TAB_SCALE;
 const TAB_H = 168 * TAB_SCALE;
 
 /** Сколько пикселей карты торчит над окном чата */
-export const REVEALED_CARD_PEEK_PX = 44;
+export const REVEALED_CARD_PEEK_PX = 50;
 
 function RevealedCardTab({
   card,

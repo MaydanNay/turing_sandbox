@@ -24,7 +24,7 @@ interface RoundTableProps {
   selfId?: string;
   selectedPlayerId?: string | null;
   onSelectPlayer?: (id: string) => void;
-  onOpenPrivateChat?: (id: string) => void;
+  onOpenPrivateChat?: (id: string, anchor: DOMRect) => void;
   /** За столом: клик по месту открывает кулуары (только RECESS) */
   privateChatAtSeats?: boolean;
 }
@@ -80,9 +80,8 @@ export function RoundTable({
           zIndex={z}
           isSelf={player.id === selfId}
           selected={selectedPlayerId === player.id}
-          onSelect={
-            privateChatAtSeats ? onOpenPrivateChat : onSelectPlayer
-          }
+          onSelect={onSelectPlayer}
+          onOpenPrivateChat={privateChatAtSeats ? onOpenPrivateChat : undefined}
         />
       );
     }

@@ -9,8 +9,12 @@ from pydantic import BaseModel, Field
 class Phase(str, Enum):
     init = "Init"
     pitch = "Pitch"
+    recess = "Recess"
     conflict = "Conflict"
+    revision = "Revision"
+    turing = "Turing"
     vote = "Vote"
+    resolve = "Resolve"
     finished = "Finished"
 
 
@@ -58,6 +62,18 @@ class SessionCreateResponse(BaseModel):
 
 class SessionFinishRequest(BaseModel):
     winner_id: str | None = None
+    winning_team: str | None = Field(
+        default=None,
+        description="SYNTHETICS | HUMAN | ABORTED | DRAW — optional; derived if omitted",
+    )
+    brig_agents: list[str] | None = Field(
+        default=None,
+        description="Canonical agent ids in brig at finish (e.g. vance)",
+    )
+    survived_agents: list[str] | None = Field(
+        default=None,
+        description="Canonical AI agent ids not in brig; derived from room if omitted",
+    )
 
 
 class SessionFinishResponse(BaseModel):
@@ -65,3 +81,33 @@ class SessionFinishResponse(BaseModel):
     status: str
     events_persisted: int
     winner_id: str | None = None
+
+
+class SessionSummary(BaseModel):
+    session_id: UUID
+    room_id: str
+    created_at: datetime
+    status: str
+    winner_id: str | None = None
+    events_count: int = 0
+    resumable: bool = False
+
+
+class SessionDetail(SessionSummary):
+    phase: str | None = None
+
+
+class SessionEventItem(BaseModel):
+    id: str | None = None
+    timestamp: datetime | str | None = None
+    user_id: str
+    is_ai: bool = False
+    action_type: str
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionEventsResponse(BaseModel):
+    session_id: UUID
+    room_id: str
+    source: str  # "postgres" | "redis"
+    events: list[SessionEventItem]

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { BottomHand } from '@/components/Hand';
 import { BrigGrid } from '@/components/Brig/BrigGrid';
+import { CharacterActionMenu } from '@/components/CharacterActionMenu';
 import { ChatToastStack } from '@/components/Chat/ChatToastStack';
 import { formatPhaseLabel } from '@/components/Hud/GameProcessPanel';
 import { GameHud } from '@/components/Hud';
@@ -12,6 +13,7 @@ import { MOCK_PLAYER_HANDS } from '@/data/mockPlayerHands';
 import { MOCK_HAND_CARDS } from '@/data/mockHand';
 import { useGeneralChatEffects } from '@/hooks/useGeneralChatEffects';
 import { cardRevealLabel } from '@/utils/cardLabel';
+import { useChatNotificationStore } from '@/store/chatNotificationStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import { useGameStore } from '@/store/gameStore';
 import type { PlayerHandCard } from '@/types/card';
@@ -32,6 +34,8 @@ interface GameSceneProps {
   selectedPlayerId: string | null;
   onSelectPlayer: (id: string) => void;
   onSendChat: (text: string) => void;
+  onSendPrivate?: (agentId: string, partnerName: string, text: string) => void;
+  onLeave?: () => void;
 }
 
 export function GameScene({
@@ -49,6 +53,8 @@ export function GameScene({
   selectedPlayerId,
   onSelectPlayer,
   onSendChat,
+  onSendPrivate,
+  onLeave,
 }: GameSceneProps) {
   const [handCards, setHandCards] = useState<PlayerHandCard[]>(MOCK_HAND_CARDS);
   const [isMyTurnToReveal, setIsMyTurnToReveal] = useState(false);
@@ -57,6 +63,8 @@ export function GameScene({
   const votes = useGameStore((s) => s.votes);
   const castVoteToBrig = useGameStore((s) => s.castVoteToBrig);
   const [privateChatPlayerId, setPrivateChatPlayerId] = useState<string | null>(null);
+  const [actionMenuPlayerId, setActionMenuPlayerId] = useState<string | null>(null);
+  const [actionMenuAnchor, setActionMenuAnchor] = useState<DOMRect | null>(null);
   const wasGatheredRef = useRef(false);
   const mockPrivatePingRef = useRef(false);
 
@@ -69,6 +77,8 @@ export function GameScene({
 
   const privateChatPlayer =
     players.find((p) => p.id === privateChatPlayerId) ?? null;
+  const actionMenuPlayer =
+    players.find((p) => p.id === actionMenuPlayerId) ?? null;
 
   useEffect(() => {
     if (myProfile?.characterId && MOCK_PLAYER_HANDS[myProfile.characterId]) {
@@ -88,6 +98,8 @@ export function GameScene({
   }, [gatheredAtTable]);
 
   const handleGatherAtTable = useCallback(() => {
+    setActionMenuPlayerId(null);
+    setActionMenuAnchor(null);
     setPrivateChatPlayerId(null);
     usePrivateChatStore.getState().setActivePartner(null);
     onGatherAtTable();
@@ -96,28 +108,61 @@ export function GameScene({
 
   const selfPlayerId = clientId ?? myProfile?.id;
 
-  /** Кулуары: всегда в лобби; за столом — только в фазе RECESS */
-  const handleOpenPrivateChat = useCallback(
+  const canOpenPrivateChat = useCallback(
     (playerId: string) => {
-      if (playerId === selfPlayerId) return;
+      if (playerId === selfPlayerId) return false;
       const target = players.find((p) => p.id === playerId);
-      if (!target?.is_alive) return;
-
-      if (!gatheredAtTable) {
-        usePrivateChatStore.getState().setActivePartner(playerId);
-        setPrivateChatPlayerId(playerId);
-        return;
-      }
-      if (gameState === 'RECESS') {
-        usePrivateChatStore.getState().setActivePartner(playerId);
-        setPrivateChatPlayerId(playerId);
-      }
+      if (!target?.is_alive) return false;
+      if (!gatheredAtTable) return true;
+      return gameState === 'RECESS';
     },
     [gatheredAtTable, gameState, players, selfPlayerId],
   );
 
+  /** Кулуары: всегда в лобби; за столом — только в фазе RECESS */
+  const handleOpenPrivateChat = useCallback(
+    (playerId: string) => {
+      if (!canOpenPrivateChat(playerId)) return;
+      setActionMenuPlayerId(null);
+      setActionMenuAnchor(null);
+      usePrivateChatStore.getState().setActivePartner(playerId);
+      setPrivateChatPlayerId(playerId);
+    },
+    [canOpenPrivateChat],
+  );
+
+  const handleCharacterPress = useCallback(
+    (playerId: string, anchor: DOMRect) => {
+      if (!canOpenPrivateChat(playerId)) return;
+      setActionMenuPlayerId(playerId);
+      setActionMenuAnchor(anchor);
+    },
+    [canOpenPrivateChat],
+  );
+
+  const handleCloseActionMenu = useCallback(() => {
+    setActionMenuPlayerId(null);
+    setActionMenuAnchor(null);
+  }, []);
+
+  const handleDeletePrivateChat = useCallback(() => {
+    if (!actionMenuPlayerId) return;
+    usePrivateChatStore.getState().clearThread(actionMenuPlayerId);
+    useChatNotificationStore.setState((state) => ({
+      items: state.items.filter((item) => item.playerId !== actionMenuPlayerId),
+    }));
+    if (privateChatPlayerId === actionMenuPlayerId) {
+      setPrivateChatPlayerId(null);
+      usePrivateChatStore.getState().setActivePartner(null);
+    }
+    setActionMenuPlayerId(null);
+    setActionMenuAnchor(null);
+  }, [actionMenuPlayerId, privateChatPlayerId]);
+
   useEffect(() => {
     if (gatheredAtTable && gameState !== 'RECESS') {
+      setActionMenuPlayerId(null);
+      setActionMenuAnchor(null);
       setPrivateChatPlayerId(null);
       usePrivateChatStore.getState().setActivePartner(null);
     }
@@ -182,7 +227,7 @@ export function GameScene({
         selfId={clientId ?? myProfile?.id}
         selectedPlayerId={selectedPlayerId}
         onSelectPlayer={onSelectPlayer}
-        onOpenPrivateChat={handleOpenPrivateChat}
+        onOpenPrivateChat={handleCharacterPress}
         privateChatAtSeats={privateChatAtSeats}
       />
 
@@ -190,9 +235,21 @@ export function GameScene({
         <BrigGrid brigCharacterIds={brigCharacterIds} players={players} />
       )}
 
+      <CharacterActionMenu
+        open={actionMenuPlayer != null && actionMenuAnchor != null}
+        playerName={actionMenuPlayer?.name ?? ''}
+        anchor={actionMenuAnchor}
+        onTalk={() => {
+          if (actionMenuPlayer) handleOpenPrivateChat(actionMenuPlayer.id);
+        }}
+        onDelete={handleDeletePrivateChat}
+        onCancel={handleCloseActionMenu}
+      />
+
       <PrivateChatOverlay
         player={privateChatPlayer}
         myProfile={myProfile}
+        onSendPrivate={onSendPrivate}
         onClose={() => {
           setPrivateChatPlayerId(null);
           usePrivateChatStore.getState().setActivePartner(null);
@@ -232,6 +289,15 @@ export function GameScene({
           <span className="hidden rounded-full border border-bunker-border/70 bg-black/45 px-2.5 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md sm:inline">
             {roomId.slice(0, 8)}
           </span>
+        )}
+        {onLeave && (
+          <button
+            type="button"
+            onClick={onLeave}
+            className="rounded-full border border-bunker-danger/50 bg-black/45 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-bunker-danger backdrop-blur-md transition hover:border-bunker-danger hover:bg-bunker-danger/15"
+          >
+            Покинуть станцию
+          </button>
         )}
       </div>
 

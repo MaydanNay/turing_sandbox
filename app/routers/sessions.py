@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.models import GameSession, SessionStatus
+from app.models import GameEvent, GameSession, SessionStatus
 from app.redis_state import redis_store
-from app.schemas import SessionCreateResponse, SessionFinishRequest, SessionFinishResponse
+from app.schemas import (
+    SessionCreateResponse,
+    SessionDetail,
+    SessionEventItem,
+    SessionEventsResponse,
+    SessionFinishRequest,
+    SessionFinishResponse,
+    SessionSummary,
+)
 from app.services import finish_session
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
@@ -42,6 +51,163 @@ async def create_session(
     )
 
 
+@router.get("", response_model=list[SessionSummary])
+async def list_sessions(
+    status: str | None = Query(default=None, description="active | finished"),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> list[SessionSummary]:
+    events_count = (
+        select(GameEvent.session_id, func.count(GameEvent.id).label("cnt"))
+        .group_by(GameEvent.session_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(GameSession, func.coalesce(events_count.c.cnt, 0))
+        .outerjoin(events_count, GameSession.id == events_count.c.session_id)
+        .order_by(GameSession.created_at.desc())
+        .limit(limit)
+    )
+
+    if status:
+        try:
+            status_enum = SessionStatus(status)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Use: {[s.value for s in SessionStatus]}",
+            ) from exc
+        stmt = stmt.where(GameSession.status == status_enum)
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    summaries: list[SessionSummary] = []
+    for session, count in rows:
+        room_id = str(session.id)
+        redis_alive = await redis_store.get_room(room_id) is not None
+        resumable = session.status == SessionStatus.active and redis_alive
+        summaries.append(
+            SessionSummary(
+                session_id=session.id,
+                room_id=room_id,
+                created_at=session.created_at,
+                status=session.status.value,
+                winner_id=session.winner_id,
+                events_count=int(count),
+                resumable=resumable,
+            )
+        )
+    return summaries
+
+
+@router.get("/{room_id}", response_model=SessionDetail)
+async def get_session(
+    room_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> SessionDetail:
+    try:
+        sid = uuid.UUID(room_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid room_id") from exc
+
+    result = await db.execute(select(GameSession).where(GameSession.id == sid))
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    count_result = await db.execute(
+        select(func.count(GameEvent.id)).where(GameEvent.session_id == sid)
+    )
+    events_count = int(count_result.scalar_one())
+
+    room = await redis_store.get_room(room_id)
+    redis_alive = room is not None
+    resumable = session.status == SessionStatus.active and redis_alive
+
+    return SessionDetail(
+        session_id=session.id,
+        room_id=room_id,
+        created_at=session.created_at,
+        status=session.status.value,
+        winner_id=session.winner_id,
+        events_count=events_count,
+        resumable=resumable,
+        phase=room.phase.value if room else None,
+    )
+
+
+@router.get("/{room_id}/events", response_model=SessionEventsResponse)
+async def get_session_events(
+    room_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> SessionEventsResponse:
+    try:
+        sid = uuid.UUID(room_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid room_id") from exc
+
+    result = await db.execute(select(GameSession).where(GameSession.id == sid))
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == SessionStatus.finished:
+        ev_result = await db.execute(
+            select(GameEvent)
+            .where(GameEvent.session_id == sid)
+            .order_by(GameEvent.timestamp.asc())
+        )
+        rows = ev_result.scalars().all()
+        events = [
+            SessionEventItem(
+                id=str(ev.id),
+                timestamp=ev.timestamp,
+                user_id=ev.user_id,
+                is_ai=ev.is_ai,
+                action_type=ev.action_type,
+                raw_payload=ev.raw_payload or {},
+            )
+            for ev in rows
+        ]
+        return SessionEventsResponse(
+            session_id=sid,
+            room_id=room_id,
+            source="postgres",
+            events=events,
+        )
+
+    # Active: serve from Redis buffer if present
+    room = await redis_store.get_room(room_id)
+    if room is None:
+        return SessionEventsResponse(
+            session_id=sid,
+            room_id=room_id,
+            source="redis",
+            events=[],
+        )
+
+    raw_events = await redis_store.list_events(room_id)
+    events = [
+        SessionEventItem(
+            id=None,
+            timestamp=ev.get("timestamp"),
+            user_id=str(ev.get("user_id", "unknown")),
+            is_ai=bool(ev.get("is_ai", False)),
+            action_type=str(ev.get("action_type", "chat")),
+            raw_payload=ev.get("raw_payload") or ev,
+        )
+        for ev in raw_events
+    ]
+    return SessionEventsResponse(
+        session_id=sid,
+        room_id=room_id,
+        source="redis",
+        events=events,
+    )
+
+
 @router.post("/{room_id}/finish", response_model=SessionFinishResponse)
 async def finish_room_session(
     room_id: str,
@@ -49,7 +215,13 @@ async def finish_room_session(
 ) -> SessionFinishResponse:
     body = body or SessionFinishRequest()
     try:
-        sid, count = await finish_session(room_id, winner_id=body.winner_id)
+        sid, count = await finish_session(
+            room_id,
+            winner_id=body.winner_id,
+            winning_team=body.winning_team,
+            brig_agents=body.brig_agents,
+            survived_agents=body.survived_agents,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

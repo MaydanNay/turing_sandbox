@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUp } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { ChatEmojiButton, insertEmojiAtCursor } from '@/components/Chat/ChatEmojiButton';
 import { CHAT_PANEL_SURFACE_CLASS } from '@/components/Hud/chatPanelSurface';
 import { CharacterPortraitLayer, buildPortraitSrc } from '@/components/PrivateChat/CharacterPortraitLayer';
 import { RevealedCardTabs, REVEALED_CARD_PEEK_PX } from '@/components/PrivateChat/RevealedCardTabs';
@@ -81,18 +82,28 @@ function PrivateMessageBubble({
 interface PrivateChatOverlayProps {
   player: Player | null;
   myProfile?: MyProfile | null;
+  onSendPrivate?: (agentId: string, partnerName: string, text: string) => void;
   onClose: () => void;
 }
 
-export function PrivateChatOverlay({ player, myProfile, onClose }: PrivateChatOverlayProps) {
+export function PrivateChatOverlay({
+  player,
+  myProfile,
+  onSendPrivate,
+  onClose,
+}: PrivateChatOverlayProps) {
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const ensureThread = usePrivateChatStore((s) => s.ensureThread);
   const sendMessage = usePrivateChatStore((s) => s.sendMessage);
   const setActivePartner = usePrivateChatStore((s) => s.setActivePartner);
   const threadMessages = usePrivateChatStore((s) =>
     player ? s.threads[player.id] : undefined,
+  );
+  const partnerTyping = usePrivateChatStore((s) =>
+    player ? Boolean(s.typingByPartner[player.id]) : false,
   );
   const messages = threadMessages ?? EMPTY_MESSAGES;
 
@@ -112,7 +123,7 @@ export function PrivateChatOverlay({ player, myProfile, onClose }: PrivateChatOv
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, player]);
+  }, [messages.length, partnerTyping, player]);
 
   useEffect(() => {
     if (!player) return;
@@ -127,7 +138,11 @@ export function PrivateChatOverlay({ player, myProfile, onClose }: PrivateChatOv
     if (!player) return;
     const text = draft.trim();
     if (!text) return;
-    sendMessage(player.id, player.name, text);
+    if (onSendPrivate) {
+      onSendPrivate(player.id, player.name, text);
+    } else {
+      sendMessage(player.id, player.name, text);
+    }
     setDraft('');
   };
 
@@ -176,7 +191,7 @@ export function PrivateChatOverlay({ player, myProfile, onClose }: PrivateChatOv
             Закрыть чат
           </button>
 
-          <div className="absolute bottom-4 left-4 right-4 z-[2] h-[80vh]">
+          <div className="absolute bottom-4 left-4 right-4 top-4 z-[2] sm:top-6 sm:right-6">
             <div className="relative flex h-full w-full flex-col pl-[min(32vw,380px)]">
               <div className="relative flex min-h-0 w-full flex-1 flex-col">
                 <RevealedCardTabs characterId={player.characterId} />
@@ -201,10 +216,24 @@ export function PrivateChatOverlay({ player, myProfile, onClose }: PrivateChatOv
                         myProfile={myProfile}
                       />
                     ))}
+                    {partnerTyping && (
+                      <p className="pl-1 font-mono text-xs tracking-wide text-bunker-neon animate-pulse">
+                        {player.name} печатает...
+                      </p>
+                    )}
                   </div>
 
-                  <div className="mt-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 shadow-inner">
+                  <div className="mt-3 flex items-center gap-2 rounded-full bg-white px-3 py-2.5 shadow-inner sm:px-4">
+                    <ChatEmojiButton
+                      inputRef={inputRef}
+                      onPick={(emoji) => {
+                        setDraft((prev) =>
+                          insertEmojiAtCursor(prev, emoji, inputRef.current),
+                        );
+                      }}
+                    />
                     <input
+                      ref={inputRef}
                       type="text"
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}

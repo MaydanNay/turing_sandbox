@@ -57,10 +57,12 @@ export interface MyProfile {
 
 /** Client → server WS payload */
 export interface WsOutboundAction {
-  action: 'chat' | 'pitch' | 'vote' | 'phase';
+  action: 'chat' | 'pitch' | 'vote' | 'phase' | 'private_chat_send';
+  type?: 'private_chat_send';
   text?: string;
   payload?: Record<string, unknown>;
   phase?: string;
+  agent_id?: string;
 }
 
 /** Spec-style inbound message (future / extended protocol) */
@@ -83,7 +85,16 @@ export interface BackendPlayerInfo {
 export interface BackendRoomState {
   room_id: string;
   session_id: string | null;
-  phase: 'Init' | 'Pitch' | 'Conflict' | 'Vote' | 'Finished';
+  phase:
+    | 'Init'
+    | 'Pitch'
+    | 'Recess'
+    | 'Conflict'
+    | 'Revision'
+    | 'Turing'
+    | 'Vote'
+    | 'Resolve'
+    | 'Finished';
   phase_deadline_ts: number | null;
   players: Record<string, BackendPlayerInfo>;
   roles_assigned: boolean;
@@ -139,13 +150,71 @@ export interface BackendErrorMessage {
   ts: string;
 }
 
+export interface BackendHistoryEvent {
+  user_id?: string;
+  is_ai?: boolean;
+  action_type?: string;
+  timestamp?: string;
+  raw_payload?: Record<string, unknown> | null;
+}
+
+export interface BackendHistoryMessage {
+  type: 'history';
+  room_id: string;
+  client_id?: string;
+  events: BackendHistoryEvent[];
+  ts: string;
+}
+
+export interface BackendPrivateChatTypingMessage {
+  type: 'private_chat_typing';
+  room_id: string;
+  client_id?: string;
+  human_id?: string;
+  agent_id: string;
+  typing: boolean;
+  ts: string;
+}
+
+export interface BackendPrivateChatMessage {
+  type: 'private_chat_message';
+  room_id: string;
+  client_id: string;
+  human_id?: string;
+  agent_id: string;
+  text: string;
+  from: 'me' | 'them';
+  is_ai?: boolean;
+  payload?: Record<string, unknown> | null;
+  ts: string;
+}
+
+export interface BackendPrivateThreadMessage {
+  sender?: string;
+  text?: string;
+  client_id?: string;
+  ts?: string;
+}
+
+export interface BackendPrivateChatSyncMessage {
+  type: 'private_chat_sync';
+  room_id: string;
+  client_id?: string;
+  threads: Record<string, BackendPrivateThreadMessage[]>;
+  ts: string;
+}
+
 export type BackendWsMessage =
   | BackendStateMessage
   | BackendPhaseChangedMessage
   | BackendChatMessage
   | BackendPlayerJoinedMessage
   | BackendPlayerLeftMessage
-  | BackendErrorMessage;
+  | BackendErrorMessage
+  | BackendHistoryMessage
+  | BackendPrivateChatTypingMessage
+  | BackendPrivateChatMessage
+  | BackendPrivateChatSyncMessage;
 
 export interface SessionCreateResponse {
   session_id: string;

@@ -16,7 +16,7 @@ interface StandingCharacterSpriteProps {
   isSelf?: boolean;
   selected?: boolean;
   onSelect?: (id: string) => void;
-  onOpenPrivateChat?: (id: string) => void;
+  onOpenPrivateChat?: (id: string, anchor: DOMRect) => void;
 }
 
 const CHIBI_ANCHOR = {
@@ -54,9 +54,13 @@ export function StandingCharacterSprite({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -4 }}
       transition={{ duration: 0.35 }}
-      onClick={() => {
+      onClick={(event) => {
         playUiSound('character');
-        (onOpenPrivateChat ?? onSelect)?.(player.id);
+        if (onOpenPrivateChat) {
+          onOpenPrivateChat(player.id, event.currentTarget.getBoundingClientRect());
+          return;
+        }
+        onSelect?.(player.id);
       }}
       aria-label={`${player.name}, ${genderLabel(player.gender)}`}
     >

@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { createSession } from '@/api/sessions';
 import { playUiSound } from '@/audio/uiSounds';
@@ -9,20 +9,18 @@ import { generateClientId } from '@/config/env';
 interface LobbyScreenProps {
   onJoinMock: () => void;
   onJoinLive: (roomId: string, clientId: string) => void;
+  onContinue?: () => void;
+  onOpenHistory?: () => void;
+  canContinue?: boolean;
   error: string | null;
 }
 
-type MenuAction = 'mock' | 'live';
+type MenuAction = 'continue' | 'mock' | 'live' | 'history';
 
 interface MenuItem {
   id: MenuAction;
   label: string;
 }
-
-const MENU_ITEMS: MenuItem[] = [
-  { id: 'mock', label: 'New Game' },
-  { id: 'live', label: 'Live Session' },
-];
 
 function MenuDiamond({ active }: { active: boolean }) {
   return (
@@ -87,16 +85,48 @@ function MenuRow({
   );
 }
 
-export function LobbyScreen({ onJoinMock, onJoinLive, error }: LobbyScreenProps) {
+export function LobbyScreen({
+  onJoinMock,
+  onJoinLive,
+  onContinue,
+  onOpenHistory,
+  canContinue = false,
+  error,
+}: LobbyScreenProps) {
+  const menuItems = useMemo<MenuItem[]>(() => {
+    const items: MenuItem[] = [];
+    if (canContinue) items.push({ id: 'continue', label: 'Continue' });
+    items.push(
+      { id: 'mock', label: 'New Game' },
+      { id: 'live', label: 'Live Session' },
+      { id: 'history', label: 'History' },
+    );
+    return items;
+  }, [canContinue]);
+
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loadingLive, setLoadingLive] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const displayError = error ?? localError;
 
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [canContinue]);
+
   const runAction = useCallback(
     async (action: MenuAction) => {
       playUiSound('table');
+
+      if (action === 'continue') {
+        onContinue?.();
+        return;
+      }
+
+      if (action === 'history') {
+        onOpenHistory?.();
+        return;
+      }
 
       if (action === 'mock') {
         onJoinMock();
@@ -115,7 +145,7 @@ export function LobbyScreen({ onJoinMock, onJoinLive, error }: LobbyScreenProps)
         setLoadingLive(false);
       }
     },
-    [onJoinMock, onJoinLive],
+    [onJoinMock, onJoinLive, onContinue, onOpenHistory],
   );
 
   useEffect(() => {
@@ -125,31 +155,27 @@ export function LobbyScreen({ onJoinMock, onJoinLive, error }: LobbyScreenProps)
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         setSelectedIndex((i) => {
-          const next = (i - 1 + MENU_ITEMS.length) % MENU_ITEMS.length;
+          const next = (i - 1 + menuItems.length) % menuItems.length;
           playUiSound('character');
           return next;
         });
-      }
-
-      if (event.key === 'ArrowDown') {
+      } else if (event.key === 'ArrowDown') {
         event.preventDefault();
         setSelectedIndex((i) => {
-          const next = (i + 1) % MENU_ITEMS.length;
+          const next = (i + 1) % menuItems.length;
           playUiSound('character');
           return next;
         });
-      }
-
-      if (event.key === 'Enter') {
+      } else if (event.key === 'Enter') {
         event.preventDefault();
-        const item = MENU_ITEMS[selectedIndex];
+        const item = menuItems[selectedIndex];
         if (item) void runAction(item.id);
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loadingLive, runAction, selectedIndex]);
+  }, [loadingLive, runAction, selectedIndex, menuItems]);
 
   return (
     <div className="relative h-full min-h-screen w-full overflow-hidden bg-black text-white">
@@ -190,7 +216,7 @@ export function LobbyScreen({ onJoinMock, onJoinLive, error }: LobbyScreenProps)
           aria-label="Main menu"
         >
           <ul className="flex flex-col items-end gap-3 sm:gap-4">
-            {MENU_ITEMS.map((item, index) => (
+            {menuItems.map((item, index) => (
               <li key={item.id} className="w-full">
                 <MenuRow
                   label={item.label}
@@ -220,18 +246,6 @@ export function LobbyScreen({ onJoinMock, onJoinLive, error }: LobbyScreenProps)
           <p className="font-mono text-[10px] text-white/35 sm:text-[11px]">
             social deduction · terminal MVP
           </p>
-
-          <div className="text-right font-mono text-[10px] text-white/55 sm:text-[11px]">
-            <p>
-              <kbd className="rounded border border-white/25 px-1.5 py-0.5 text-white/70">↑</kbd>{' '}
-              <kbd className="rounded border border-white/25 px-1.5 py-0.5 text-white/70">↓</kbd>{' '}
-              navigate
-            </p>
-            <p className="mt-1">
-              <kbd className="rounded border border-white/25 px-1.5 py-0.5 text-white/70">Enter</kbd>{' '}
-              select
-            </p>
-          </div>
         </footer>
       </div>
     </div>

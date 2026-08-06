@@ -2,6 +2,7 @@ import { ArrowUp } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 
+import { ChatEmojiButton, insertEmojiAtCursor } from '@/components/Chat/ChatEmojiButton';
 import { RevealCardThumb } from '@/components/Hand/RevealCardThumb';
 import { CHAT_PANEL_SURFACE_CLASS } from '@/components/Hud/chatPanelSurface';
 import { GameProcessPanel } from '@/components/Hud/GameProcessPanel';
@@ -338,6 +339,7 @@ export function GameChatPanel({
   const [draft, setDraft] = useState('');
   const [inspectCharacterId, setInspectCharacterId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const activeTypers = typing.filter(
     (name) => myProfile?.name !== name && name.length > 0,
@@ -443,11 +445,20 @@ export function GameChatPanel({
         )}
 
         <div
-          className={`mt-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 shadow-inner ${
+          className={`mt-3 flex items-center gap-2 rounded-full bg-white px-3 py-2.5 shadow-inner sm:px-4 ${
             inputDisabled || isVotingMode ? 'opacity-40' : ''
           }`}
         >
+          <ChatEmojiButton
+            disabled={inputDisabled || isVotingMode}
+            inputRef={inputRef}
+            onPick={(emoji) => {
+              if (inputDisabled || isVotingMode) return;
+              setDraft((prev) => insertEmojiAtCursor(prev, emoji, inputRef.current));
+            }}
+          />
           <input
+            ref={inputRef}
             type="text"
             value={draft}
             readOnly={inputDisabled || isVotingMode}
