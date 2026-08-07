@@ -19,6 +19,7 @@ from app.schemas import (
     SessionFinishRequest,
     SessionFinishResponse,
     SessionSummary,
+    room_state_for_client,
 )
 from app.services import finish_session
 
@@ -215,7 +216,7 @@ async def finish_room_session(
 ) -> SessionFinishResponse:
     body = body or SessionFinishRequest()
     try:
-        sid, count = await finish_session(
+        sid, count, outcome_team = await finish_session(
             room_id,
             winner_id=body.winner_id,
             winning_team=body.winning_team,
@@ -230,6 +231,7 @@ async def finish_room_session(
         status=SessionStatus.finished.value,
         events_persisted=count,
         winner_id=body.winner_id,
+        winning_team=outcome_team,
     )
 
 
@@ -238,4 +240,4 @@ async def get_room_state(room_id: str) -> dict:
     state = await redis_store.get_room(room_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Room not found")
-    return state.model_dump(mode="json")
+    return room_state_for_client(state)

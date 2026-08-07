@@ -38,6 +38,8 @@ interface GameChatPanelProps {
   mockMode?: boolean;
   onMockStartVoting?: () => void;
   forceVoting?: boolean;
+  onClose?: () => void;
+  showCloseButton?: boolean;
 }
 
 function PlayerAvatar({
@@ -153,7 +155,7 @@ function PlayerSidebar({
   };
 
   return (
-    <aside className={`flex w-[min(240px,28vw)] shrink-0 flex-col ${CHAT_PANEL_SURFACE_CLASS} sm:w-[260px]`}>
+    <aside className={`flex h-full min-h-0 w-[min(240px,28vw)] shrink-0 flex-col ${CHAT_PANEL_SURFACE_CLASS} sm:w-[260px]`}>
       <GameProcessPanel
         phase={gamePhase}
         revealPlayer={revealPlayer}
@@ -321,7 +323,7 @@ export function GameChatPanel({
   onSend,
   inputDisabled = false,
   placeholder = 'Отправить сообщение ...',
-  topOffsetClass = 'top-12 sm:top-14',
+  topOffsetClass = 'top-4',
   typing = [],
   gamePhase = 'PITCH',
   revealPlayer = null,
@@ -335,6 +337,8 @@ export function GameChatPanel({
   mockMode = false,
   onMockStartVoting,
   forceVoting = false,
+  onClose,
+  showCloseButton: _showCloseButton = false,
 }: GameChatPanelProps) {
   const [draft, setDraft] = useState('');
   const [inspectCharacterId, setInspectCharacterId] = useState<string | null>(null);
@@ -364,7 +368,7 @@ export function GameChatPanel({
 
   return (
     <div
-      className={`pointer-events-auto absolute bottom-4 left-4 right-4 flex ${topOffsetClass} min-w-0 gap-4`}
+      className={`pointer-events-auto absolute bottom-4 left-4 right-4 flex min-h-0 min-w-0 gap-4 ${topOffsetClass}`}
     >
       <PlayerSidebar
         players={players}
@@ -378,7 +382,22 @@ export function GameChatPanel({
         forceVoting={forceVoting}
       />
 
-      <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${CHAT_PANEL_SURFACE_CLASS} p-4 shadow-2xl sm:p-5`}>
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-4 top-4 z-[3] rounded-md border-2 border-red-500/70 bg-red-950/40 px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-red-400 transition hover:bg-red-500/20 hover:text-red-300 sm:right-5 sm:top-5"
+          >
+            Закрыть общий чат
+          </button>
+        )}
+
+        <div
+          className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${CHAT_PANEL_SURFACE_CLASS} p-4 shadow-2xl sm:p-5 ${
+            onClose ? 'pt-[4.25rem] sm:pt-[4.5rem]' : ''
+          }`}
+        >
         <div
           ref={listRef}
           className="custom-scrollbar flex flex-1 flex-col gap-4 overflow-y-auto pr-1"
@@ -488,6 +507,7 @@ export function GameChatPanel({
           >
             <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
           </button>
+        </div>
         </div>
       </div>
     </div>

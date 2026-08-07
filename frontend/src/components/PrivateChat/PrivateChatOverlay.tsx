@@ -7,11 +7,15 @@ import { CHAT_PANEL_SURFACE_CLASS } from '@/components/Hud/chatPanelSurface';
 import { CharacterPortraitLayer, buildPortraitSrc } from '@/components/PrivateChat/CharacterPortraitLayer';
 import { RevealedCardTabs, REVEALED_CARD_PEEK_PX } from '@/components/PrivateChat/RevealedCardTabs';
 import { ASSETS, hasCharacterCard, hasChatPortrait } from '@/config/assets';
-import { getRevealedCardsForPlayer } from '@/data/mockPlayerHands';
+import { useGameStore } from '@/store/gameStore';
+import { EMPTY_CARDS } from '@/store/gameStore';
 import { usePrivateChatStore, type PrivateChatMessage } from '@/store/privateChatStore';
 import type { MyProfile, Player } from '@/types/game';
 
 const EMPTY_MESSAGES: PrivateChatMessage[] = [];
+
+/** Место под absolute «Закрыть чат» (top-4 + высота кнопки), даже когда нет вкладок карт */
+const CLOSE_BUTTON_CLEARANCE_PX = 56;
 
 function ChatAvatar({
   characterId,
@@ -148,8 +152,13 @@ export function PrivateChatOverlay({
 
   const portraitSrc = player ? buildPortraitSrc(player.characterId) : ASSETS.characters.default;
 
-  const hasRevealedCards =
-    player !== null && getRevealedCardsForPlayer(player.characterId).length > 0;
+  const partnerCharacterId = player?.characterId;
+  const revealedForPartner = useGameStore((s) =>
+    partnerCharacterId
+      ? (s.revealedByPlayer[partnerCharacterId] ?? EMPTY_CARDS)
+      : EMPTY_CARDS,
+  );
+  const hasRevealedCards = revealedForPartner.length > 0;
 
   return (
     <AnimatePresence>
@@ -198,9 +207,13 @@ export function PrivateChatOverlay({
 
                 <div
                   className={`relative z-10 flex w-full min-h-0 flex-1 flex-col ${CHAT_PANEL_SURFACE_CLASS} p-4 shadow-2xl sm:p-5`}
-                  style={{ marginTop: hasRevealedCards ? REVEALED_CARD_PEEK_PX : 0 }}
+                  style={{
+                    marginTop: hasRevealedCards
+                      ? Math.max(REVEALED_CARD_PEEK_PX, CLOSE_BUTTON_CLEARANCE_PX)
+                      : CLOSE_BUTTON_CLEARANCE_PX,
+                  }}
                 >
-                  <p className="mb-4 font-display text-lg font-semibold text-white">
+                  <p className="mb-4 pr-28 font-display text-lg font-semibold text-white sm:pr-32">
                     Кулуары · {player.name}
                   </p>
 

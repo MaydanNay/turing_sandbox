@@ -7,7 +7,6 @@ import { ASSETS } from '@/config/assets';
 import { generateClientId } from '@/config/env';
 
 interface LobbyScreenProps {
-  onJoinMock: () => void;
   onJoinLive: (roomId: string, clientId: string) => void;
   onContinue?: () => void;
   onOpenHistory?: () => void;
@@ -15,7 +14,7 @@ interface LobbyScreenProps {
   error: string | null;
 }
 
-type MenuAction = 'continue' | 'mock' | 'live' | 'history';
+type MenuAction = 'continue' | 'new_game' | 'history';
 
 interface MenuItem {
   id: MenuAction;
@@ -86,7 +85,6 @@ function MenuRow({
 }
 
 export function LobbyScreen({
-  onJoinMock,
   onJoinLive,
   onContinue,
   onOpenHistory,
@@ -96,11 +94,7 @@ export function LobbyScreen({
   const menuItems = useMemo<MenuItem[]>(() => {
     const items: MenuItem[] = [];
     if (canContinue) items.push({ id: 'continue', label: 'Continue' });
-    items.push(
-      { id: 'mock', label: 'New Game' },
-      { id: 'live', label: 'Live Session' },
-      { id: 'history', label: 'History' },
-    );
+    items.push({ id: 'new_game', label: 'New Game' }, { id: 'history', label: 'History' });
     return items;
   }, [canContinue]);
 
@@ -128,11 +122,6 @@ export function LobbyScreen({
         return;
       }
 
-      if (action === 'mock') {
-        onJoinMock();
-        return;
-      }
-
       setLoadingLive(true);
       setLocalError(null);
       try {
@@ -145,7 +134,7 @@ export function LobbyScreen({
         setLoadingLive(false);
       }
     },
-    [onJoinMock, onJoinLive, onContinue, onOpenHistory],
+    [onJoinLive, onContinue, onOpenHistory],
   );
 
   useEffect(() => {
@@ -221,7 +210,7 @@ export function LobbyScreen({
                 <MenuRow
                   label={item.label}
                   selected={selectedIndex === index}
-                  loading={item.id === 'live' && loadingLive}
+                  loading={item.id === 'new_game' && loadingLive}
                   onHover={() => {
                     if (selectedIndex !== index) {
                       playUiSound('character');
@@ -244,7 +233,7 @@ export function LobbyScreen({
 
         <footer className="mt-auto flex items-end justify-between px-6 pb-5 sm:px-10 sm:pb-7">
           <p className="font-mono text-[10px] text-white/35 sm:text-[11px]">
-            social deduction · terminal MVP
+            social deduction · helixa · maydi
           </p>
         </footer>
       </div>

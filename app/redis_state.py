@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from typing import Any
 
 import redis.asyncio as aioredis
 
 from app.config import settings
-from app.schemas import Phase, PlayerInfo, RoomState
+from app.schemas import Faction, Phase, PlayerInfo, RoomState
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,30 @@ EVENTS_KEY = "bunker:room:{room_id}:events"
 SESSION_KEY = "bunker:session:{session_id}:room"
 PRIVATE_KEY = "bunker:room:{room_id}:private:{human_id}:{agent_id}"
 PRIVATE_PATTERN = "bunker:room:{room_id}:private:*"
+HAND_KEY = "bunker:room:{room_id}:hand:{client_id}"
+HAND_PATTERN = "bunker:room:{room_id}:hand:*"
 
-ROLES = ["Врач", "Инженер", "Повар", "Военный", "Биолог", "Механик"]
+ROLES = [
+    "Врач",
+    "Инженер",
+    "Повар",
+    "Военный",
+    "Биолог",
+    "Механик",
+    "Связист",
+    "Психолог",
+]
+# Must match frontend CHARACTERS / Helixa agent personas
+CHARACTER_IDS = (
+    "vance",
+    "cole",
+    "martha",
+    "penny",
+    "gwen",
+    "logan",
+    "chester",
+    "roxy",
+)
 
 
 class RedisStateStore:
@@ -118,6 +141,8 @@ class RedisStateStore:
         state.players[client_id] = PlayerInfo(
             client_id=client_id,
             role=role if role is not None else (existing.role if existing else None),
+            character_id=existing.character_id if existing else None,
+            faction=existing.faction if existing else None,
             is_ai=is_ai if existing is None else existing.is_ai or is_ai,
             connected=connected,
         )
@@ -143,18 +168,179 @@ class RedisStateStore:
         return state
 
     async def assign_roles(self, room_id: str) -> RoomState:
+        """Shuffle characters + professions + factions, then deal 6-card hands (once)."""
         state = await self.ensure_room(room_id)
         if state.roles_assigned:
+            if not state.hands_dealt:
+                await self.deal_hands(room_id)
+                state = await self.ensure_room(room_id)
             return state
-        for idx, client_id in enumerate(state.players.keys()):
-            role = ROLES[idx % len(ROLES)]
+
+        client_ids = list(state.players.keys())
+        characters = list(CHARACTER_IDS)
+        professions = list(ROLES)
+        random.shuffle(characters)
+        random.shuffle(professions)
+
+        for idx, client_id in enumerate(client_ids):
             player = state.players[client_id]
-            state.players[client_id] = player.model_copy(update={"role": role})
+            character_id = characters[idx % len(characters)]
+            role = professions[idx % len(professions)]
+            state.players[client_id] = player.model_copy(
+                update={"role": role, "character_id": character_id}
+            )
+
+        self._assign_factions(state)
+
         state.roles_assigned = True
         if state.phase == Phase.init:
             state.phase = Phase.pitch
         await self.save_room(state)
+        logger.info(
+            "Assigned characters room=%s mapping=%s factions=%s",
+            room_id,
+            {cid: p.character_id for cid, p in state.players.items()},
+            {cid: (p.faction.value if p.faction else None) for cid, p in state.players.items()},
+        )
+        await self.deal_hands(room_id)
+        return await self.ensure_room(room_id)
+
+    @staticmethod
+    def _assign_factions(state: RoomState) -> None:
+        """
+        Real humans → HUMAN. Among AI seats, synthetic_count are SYNTHETIC;
+        remaining AI seats are HUMAN (still LLM bots, human faction for win/dataset).
+        Agent-facing Helixa prompts never receive SYNTHETIC.
+        """
+        human_seats = [cid for cid, p in state.players.items() if not p.is_ai]
+        ai_seats = [cid for cid, p in state.players.items() if p.is_ai]
+
+        for cid in human_seats:
+            player = state.players[cid]
+            state.players[cid] = player.model_copy(update={"faction": Faction.human})
+
+        n_syn = min(max(0, int(settings.synthetic_count)), len(ai_seats))
+        synthetic_ids = set(random.sample(ai_seats, n_syn)) if n_syn else set()
+        for cid in ai_seats:
+            fac = Faction.synthetic if cid in synthetic_ids else Faction.human
+            player = state.players[cid]
+            state.players[cid] = player.model_copy(update={"faction": fac})
+
+    async def _hand_key(self, room_id: str, client_id: str) -> str:
+        return HAND_KEY.format(room_id=room_id, client_id=client_id)
+
+    async def save_hand(
+        self, room_id: str, client_id: str, hand: list[dict[str, Any]]
+    ) -> None:
+        key = await self._hand_key(room_id, client_id)
+        await self.redis.set(key, json.dumps(hand, ensure_ascii=False))
+        await self._touch_private_ttl(room_id, key)
+
+    async def get_hand(
+        self, room_id: str, client_id: str
+    ) -> list[dict[str, Any]] | None:
+        raw = await self.redis.get(await self._hand_key(room_id, client_id))
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, list) else None
+
+    async def deal_hands(self, room_id: str) -> RoomState:
+        from app.services.card_deal import build_hands_for_room
+
+        state = await self.ensure_room(room_id)
+        if state.hands_dealt:
+            # Repair: flag set but Redis hand key missing (TTL / partial wipe)
+            missing = [
+                cid
+                for cid in state.players
+                if await self.get_hand(room_id, cid) is None
+            ]
+            if not missing:
+                return state
+            logger.warning(
+                "hands_dealt but missing hands room=%s missing=%s — repairing",
+                room_id,
+                missing,
+            )
+            assignments = {
+                cid: state.players[cid].character_id for cid in missing
+            }
+            professions = {cid: state.players[cid].role for cid in missing}
+            hands = build_hands_for_room(assignments, professions=professions)
+            for client_id, hand in hands.items():
+                await self.save_hand(room_id, client_id, hand)
+            return state
+
+        assignments = {cid: p.character_id for cid, p in state.players.items()}
+        professions = {cid: p.role for cid, p in state.players.items()}
+        hands = build_hands_for_room(assignments, professions=professions)
+        for client_id, hand in hands.items():
+            await self.save_hand(room_id, client_id, hand)
+
+        state.hands_dealt = True
+        await self.save_room(state)
+        logger.info("Dealt hands room=%s players=%s", room_id, list(hands.keys()))
         return state
+
+    async def ensure_hand(
+        self, room_id: str, client_id: str
+    ) -> list[dict[str, Any]] | None:
+        """Return hand; repair-deal if roles exist but Redis key is gone."""
+        hand = await self.get_hand(room_id, client_id)
+        if hand is not None:
+            return hand
+        state = await self.get_room(room_id)
+        if state is None or not state.roles_assigned:
+            return None
+        await self.deal_hands(room_id)
+        return await self.get_hand(room_id, client_id)
+
+    async def reveal_card_in_hand(
+        self, room_id: str, client_id: str, card_id: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """
+        Mark card revealed in owner's hand.
+        Returns (card, error). Secret missions can be marked for owner but
+        callers must not broadcast them.
+        """
+        hand = await self.get_hand(room_id, client_id)
+        if hand is None:
+            return None, "hand_missing"
+        found: dict[str, Any] | None = None
+        for card in hand:
+            if str(card.get("id")) == card_id:
+                card["is_revealed"] = True
+                found = card
+                break
+        if found is None:
+            return None, "card_not_found"
+        await self.save_hand(room_id, client_id, hand)
+        return found, None
+
+    async def public_revealed_by_player(
+        self, room_id: str
+    ) -> dict[str, list[dict[str, Any]]]:
+        from app.services.card_deal import revealed_public_cards
+
+        state = await self.get_room(room_id)
+        if state is None:
+            return {}
+        out: dict[str, list[dict[str, Any]]] = {}
+        for client_id, player in state.players.items():
+            hand = await self.get_hand(room_id, client_id)
+            if not hand:
+                continue
+            revealed = revealed_public_cards(hand)
+            if not revealed:
+                continue
+            key = player.character_id or client_id
+            out[key] = revealed
+            out[client_id] = revealed
+        return out
 
     async def append_event(self, room_id: str, event: dict[str, Any]) -> None:
         key = self._events_key(room_id)
@@ -253,6 +439,9 @@ class RedisStateStore:
             keys.append(SESSION_KEY.format(session_id=state.session_id))
         private_pattern = PRIVATE_PATTERN.format(room_id=room_id)
         async for key in self.redis.scan_iter(match=private_pattern, count=100):
+            keys.append(key)
+        hand_pattern = HAND_PATTERN.format(room_id=room_id)
+        async for key in self.redis.scan_iter(match=hand_pattern, count=100):
             keys.append(key)
         if keys:
             await self.redis.delete(*keys)

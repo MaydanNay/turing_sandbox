@@ -1,29 +1,32 @@
-import { Wifi, WifiOff } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { BottomHand } from '@/components/Hand';
 import { BrigGrid } from '@/components/Brig/BrigGrid';
 import { CharacterActionMenu } from '@/components/CharacterActionMenu';
 import { ChatToastStack } from '@/components/Chat/ChatToastStack';
-import { formatPhaseLabel } from '@/components/Hud/GameProcessPanel';
 import { GameHud } from '@/components/Hud';
+import { GameTopMenu } from '@/components/GameTopMenu';
+import { MeetingAnnouncement } from '@/components/MeetingAnnouncement';
 import { PrivateChatOverlay } from '@/components/PrivateChat';
 import { RoundTable } from '@/components/RoundTable';
-import { MOCK_PLAYER_HANDS } from '@/data/mockPlayerHands';
-import { MOCK_HAND_CARDS } from '@/data/mockHand';
+import { SceneCoverFrame } from '@/components/SceneCoverFrame';
+import { TableMeetingModal } from '@/components/TableMeetingModal';
+import { isWalkEditEnabled, WalkEditorOverlay } from '@/components/WalkEditorOverlay';
 import { useGeneralChatEffects } from '@/hooks/useGeneralChatEffects';
 import { cardRevealLabel } from '@/utils/cardLabel';
-import { useChatNotificationStore } from '@/store/chatNotificationStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import { useGameStore } from '@/store/gameStore';
-import type { PlayerHandCard } from '@/types/card';
 import type { ChatMessage, GamePhase, MyProfile, Player, TypingIndicator } from '@/types/game';
 
 interface GameSceneProps {
   gameState: GamePhase;
   players: Player[];
   gatheredAtTable: boolean;
+  seatedPlayerIds: string[];
+  onSitSelf: (playerId: string) => void;
+  onStandSelf: (playerId: string) => void;
   onGatherAtTable: () => void;
+  onLeaveTable?: () => void;
   chat: ChatMessage[];
   typing: TypingIndicator[];
   myProfile: MyProfile | null;
@@ -35,6 +38,7 @@ interface GameSceneProps {
   onSelectPlayer: (id: string) => void;
   onSendChat: (text: string) => void;
   onSendPrivate?: (agentId: string, partnerName: string, text: string) => void;
+  onRevealCard?: (cardId: string) => void;
   onLeave?: () => void;
 }
 
@@ -42,7 +46,11 @@ export function GameScene({
   gameState,
   players,
   gatheredAtTable,
+  seatedPlayerIds,
+  onSitSelf,
+  onStandSelf,
   onGatherAtTable,
+  onLeaveTable,
   chat,
   typing,
   myProfile,
@@ -54,37 +62,48 @@ export function GameScene({
   onSelectPlayer,
   onSendChat,
   onSendPrivate,
+  onRevealCard,
   onLeave,
 }: GameSceneProps) {
-  const [handCards, setHandCards] = useState<PlayerHandCard[]>(MOCK_HAND_CARDS);
+  const handCards = useGameStore((s) => s.myHand);
+  const revealMyCard = useGameStore((s) => s.revealMyCard);
   const [isMyTurnToReveal, setIsMyTurnToReveal] = useState(false);
   const recordCardReveal = useGameStore((s) => s.recordCardReveal);
   const brigCharacterIds = useGameStore((s) => s.brigCharacterIds);
   const votes = useGameStore((s) => s.votes);
+  const meetingCallsUsed = useGameStore((s) => s.meetingCallsUsed);
+  const lastMeetingCallAt = useGameStore((s) => s.lastMeetingCallAt);
   const castVoteToBrig = useGameStore((s) => s.castVoteToBrig);
   const [privateChatPlayerId, setPrivateChatPlayerId] = useState<string | null>(null);
   const [actionMenuPlayerId, setActionMenuPlayerId] = useState<string | null>(null);
   const [actionMenuAnchor, setActionMenuAnchor] = useState<DOMRect | null>(null);
+  const [generalChatOpen, setGeneralChatOpen] = useState(true);
+  const [meetingAnnounce, setMeetingAnnounce] = useState(false);
+  const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const wasGatheredRef = useRef(false);
   const mockPrivatePingRef = useRef(false);
+  const walkEdit = useMemo(() => isWalkEditEnabled(), []);
+
+  const openGeneralChat = useCallback(() => {
+    setGeneralChatOpen(true);
+  }, []);
+
+  const closeGeneralChat = useCallback(() => {
+    setGeneralChatOpen(false);
+  }, []);
 
   useGeneralChatEffects({
     chat,
     myProfile,
     gatheredAtTable,
     gameState,
+    generalChatOpen,
   });
 
   const privateChatPlayer =
     players.find((p) => p.id === privateChatPlayerId) ?? null;
   const actionMenuPlayer =
     players.find((p) => p.id === actionMenuPlayerId) ?? null;
-
-  useEffect(() => {
-    if (myProfile?.characterId && MOCK_PLAYER_HANDS[myProfile.characterId]) {
-      setHandCards(MOCK_PLAYER_HANDS[myProfile.characterId]!);
-    }
-  }, [myProfile?.characterId]);
 
   useEffect(() => {
     if (gatheredAtTable && !wasGatheredRef.current) {
@@ -94,8 +113,15 @@ export function GameScene({
     if (!gatheredAtTable) {
       wasGatheredRef.current = false;
       setIsMyTurnToReveal(false);
+      setGeneralChatOpen(true);
     }
   }, [gatheredAtTable]);
+
+  useEffect(() => {
+    if (gameState === 'RECESS') {
+      setGeneralChatOpen(true);
+    }
+  }, [gameState]);
 
   const handleGatherAtTable = useCallback(() => {
     setActionMenuPlayerId(null);
@@ -105,6 +131,42 @@ export function GameScene({
     onGatherAtTable();
     setIsMyTurnToReveal(true);
   }, [onGatherAtTable]);
+
+  const handleCallMeeting = useCallback(() => {
+    if (gatheredAtTable || meetingAnnounce) return;
+    const ok = useGameStore.getState().tryCallMeeting();
+    if (!ok) return;
+    setTableMenuOpen(false);
+    setActionMenuPlayerId(null);
+    setActionMenuAnchor(null);
+    setPrivateChatPlayerId(null);
+    usePrivateChatStore.getState().setActivePartner(null);
+    setMeetingAnnounce(true);
+  }, [gatheredAtTable, meetingAnnounce]);
+
+  const handleMeetingAnnounceDone = useCallback(() => {
+    setMeetingAnnounce(false);
+    handleGatherAtTable();
+  }, [handleGatherAtTable]);
+
+  const handleOpenTableMenu = useCallback(() => {
+    if (gatheredAtTable || meetingAnnounce) return;
+    setActionMenuPlayerId(null);
+    setActionMenuAnchor(null);
+    setTableMenuOpen(true);
+  }, [gatheredAtTable, meetingAnnounce]);
+
+  const handleCloseTableMenu = useCallback(() => {
+    setTableMenuOpen(false);
+  }, []);
+
+  const handleLeaveTable = useCallback(() => {
+    setActionMenuPlayerId(null);
+    setActionMenuAnchor(null);
+    setPrivateChatPlayerId(null);
+    usePrivateChatStore.getState().setActivePartner(null);
+    onLeaveTable?.();
+  }, [onLeaveTable]);
 
   const selfPlayerId = clientId ?? myProfile?.id;
 
@@ -145,20 +207,6 @@ export function GameScene({
     setActionMenuAnchor(null);
   }, []);
 
-  const handleDeletePrivateChat = useCallback(() => {
-    if (!actionMenuPlayerId) return;
-    usePrivateChatStore.getState().clearThread(actionMenuPlayerId);
-    useChatNotificationStore.setState((state) => ({
-      items: state.items.filter((item) => item.playerId !== actionMenuPlayerId),
-    }));
-    if (privateChatPlayerId === actionMenuPlayerId) {
-      setPrivateChatPlayerId(null);
-      usePrivateChatStore.getState().setActivePartner(null);
-    }
-    setActionMenuPlayerId(null);
-    setActionMenuAnchor(null);
-  }, [actionMenuPlayerId, privateChatPlayerId]);
-
   useEffect(() => {
     if (gatheredAtTable && gameState !== 'RECESS') {
       setActionMenuPlayerId(null);
@@ -195,45 +243,72 @@ export function GameScene({
     (cardId: string) => {
       if (!isMyTurnToReveal) return;
 
-      const card = handCards.find((c) => c.id === cardId);
-      if (!card || card.isRevealed) return;
+      const revealed = revealMyCard(cardId);
+      if (!revealed) return;
 
-      const revealed = { ...card, isRevealed: true };
-      setHandCards((prev) => prev.map((c) => (c.id === cardId ? revealed : c)));
+      onRevealCard?.(cardId);
 
-      recordCardReveal(
-        myProfile?.name ?? 'Вы',
-        {
-          type: revealed.type,
-          title: revealed.title,
-          description: revealed.description,
-          imageUrl: revealed.imageUrl,
-        },
-        cardRevealLabel(revealed),
-      );
+      if (revealed.type !== 'secret_mission') {
+        recordCardReveal(
+          myProfile?.name ?? 'Вы',
+          {
+            type: revealed.type,
+            title: revealed.title,
+            description: revealed.description,
+            imageUrl: revealed.imageUrl,
+          },
+          cardRevealLabel(revealed),
+        );
+      }
       setIsMyTurnToReveal(false);
     },
-    [handCards, isMyTurnToReveal, myProfile, recordCardReveal],
+    [isMyTurnToReveal, myProfile, onRevealCard, recordCardReveal, revealMyCard],
   );
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-black text-bunker-text">
-      <ChatToastStack onOpenPrivateChat={handleOpenPrivateChat} />
-
-      <RoundTable
-        players={players}
-        gatheredAtTable={gatheredAtTable}
-        onGatherAtTable={handleGatherAtTable}
-        selfId={clientId ?? myProfile?.id}
-        selectedPlayerId={selectedPlayerId}
-        onSelectPlayer={onSelectPlayer}
-        onOpenPrivateChat={handleCharacterPress}
-        privateChatAtSeats={privateChatAtSeats}
+      <ChatToastStack
+        onOpenPrivateChat={handleOpenPrivateChat}
+        onOpenGeneralChat={openGeneralChat}
       />
 
-      {gatheredAtTable && (
-        <BrigGrid brigCharacterIds={brigCharacterIds} players={players} />
-      )}
+      <SceneCoverFrame>
+        <RoundTable
+          players={players}
+          gatheredAtTable={gatheredAtTable}
+          seatedPlayerIds={seatedPlayerIds}
+          onSitSelf={onSitSelf}
+          onStandSelf={onStandSelf}
+          onLeaveTable={onLeaveTable ? handleLeaveTable : undefined}
+          onOpenTableMenu={handleOpenTableMenu}
+          selfId={clientId ?? myProfile?.id}
+          selectedPlayerId={selectedPlayerId}
+          onSelectPlayer={onSelectPlayer}
+          onOpenPrivateChat={handleCharacterPress}
+          privateChatAtSeats={privateChatAtSeats}
+        />
+        {walkEdit && <WalkEditorOverlay />}
+      </SceneCoverFrame>
+
+      <TableMeetingModal
+        open={tableMenuOpen}
+        meetingCallsUsed={meetingCallsUsed}
+        lastMeetingCallAt={lastMeetingCallAt}
+        onCallMeeting={handleCallMeeting}
+        onCancel={handleCloseTableMenu}
+      />
+
+      <MeetingAnnouncement
+        open={meetingAnnounce}
+        callerName={myProfile?.name ?? 'Вы'}
+        onDone={handleMeetingAnnounceDone}
+      />
+
+      {gatheredAtTable &&
+        !privateChatPlayerId &&
+        !(generalChatOpen && gameState !== 'RECESS') && (
+          <BrigGrid brigCharacterIds={brigCharacterIds} players={players} />
+        )}
 
       <CharacterActionMenu
         open={actionMenuPlayer != null && actionMenuAnchor != null}
@@ -242,7 +317,6 @@ export function GameScene({
         onTalk={() => {
           if (actionMenuPlayer) handleOpenPrivateChat(actionMenuPlayer.id);
         }}
-        onDelete={handleDeletePrivateChat}
         onCancel={handleCloseActionMenu}
       />
 
@@ -258,55 +332,42 @@ export function GameScene({
 
       <div className="pointer-events-none absolute inset-0 z-[35] bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.08)_50%)] bg-[length:100%_4px] opacity-25" />
 
-      <div className="absolute left-4 top-4 z-[36] flex flex-wrap items-center gap-2">
-        {!gatheredAtTable && (
-          <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
-            Нажмите на персонажа — кулуары
-          </span>
-        )}
-        {!gatheredAtTable && (
-          <span className="rounded-full border border-bunker-amber/60 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-amber backdrop-blur-md">
-            Нажмите на стол — общий чат
-          </span>
-        )}
-        {gatheredAtTable && gameState === 'RECESS' && (
-          <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
-            Нажмите на игрока — кулуары
-          </span>
-        )}
-        <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-bunker-neon backdrop-blur-md">
-          {formatPhaseLabel(gameState)}
-        </span>
-        <span className="flex items-center gap-1 rounded-full border border-bunker-border/70 bg-black/45 px-2.5 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
-          {connected ? (
-            <Wifi className="h-3 w-3 text-bunker-neon" />
-          ) : (
-            <WifiOff className="h-3 w-3" />
+      {!(
+        privateChatPlayerId ||
+        (gatheredAtTable && gameState !== 'RECESS' && generalChatOpen)
+      ) && (
+        <div className="absolute left-4 top-4 z-[36] flex flex-wrap items-center gap-2">
+          <GameTopMenu
+            gameState={gameState}
+            connected={connected}
+            mockMode={mockMode}
+            roomId={roomId}
+            onLeave={onLeave}
+          />
+          {gatheredAtTable && gameState === 'RECESS' && (
+            <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
+              Нажмите на игрока — кулуары
+            </span>
           )}
-          {connected ? 'LIVE' : mockMode ? 'MOCK' : 'OFF'}
-        </span>
-        {roomId && (
-          <span className="hidden rounded-full border border-bunker-border/70 bg-black/45 px-2.5 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md sm:inline">
-            {roomId.slice(0, 8)}
-          </span>
-        )}
-        {onLeave && (
-          <button
-            type="button"
-            onClick={onLeave}
-            className="rounded-full border border-bunker-danger/50 bg-black/45 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-bunker-danger backdrop-blur-md transition hover:border-bunker-danger hover:bg-bunker-danger/15"
-          >
-            Покинуть станцию
-          </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      {!gatheredAtTable && (
+      {!gatheredAtTable && !walkEdit && (
         <BottomHand
           cards={handCards}
           revealMode={false}
           onRevealCard={handleRevealCard}
         />
+      )}
+
+      {gatheredAtTable && gameState !== 'RECESS' && !generalChatOpen && (
+        <button
+          type="button"
+          onClick={openGeneralChat}
+          className="pointer-events-auto absolute bottom-6 right-6 z-[36] rounded-md border-2 border-amber-300/50 bg-black/70 px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-amber-200 backdrop-blur-md transition hover:border-amber-300/80 hover:bg-amber-500/15"
+        >
+          Общий чат
+        </button>
       )}
 
       <GameHud
@@ -326,6 +387,9 @@ export function GameScene({
         votes={votes}
         clientId={clientId}
         mockMode={mockMode}
+        panelOpen={generalChatOpen}
+        onClosePanel={closeGeneralChat}
+        onOpenPanel={openGeneralChat}
       />
     </div>
   );

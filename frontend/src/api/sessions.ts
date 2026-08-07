@@ -47,7 +47,11 @@ export async function finishSession(
     brigAgents?: string[];
     survivedAgents?: string[];
   },
-): Promise<{ session_id: string; events_persisted: number }> {
+): Promise<{
+  session_id: string;
+  events_persisted: number;
+  winning_team?: string | null;
+}> {
   const res = await fetch(buildApiUrl(`/api/v1/sessions/${roomId}/finish`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -61,7 +65,11 @@ export async function finishSession(
   if (!res.ok) {
     throw new Error(`Failed to finish session: ${res.status}`);
   }
-  return res.json() as Promise<{ session_id: string; events_persisted: number }>;
+  return res.json() as Promise<{
+    session_id: string;
+    events_persisted: number;
+    winning_team?: string | null;
+  }>;
 }
 
 export async function fetchRoomState(roomId: string): Promise<unknown> {

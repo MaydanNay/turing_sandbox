@@ -11,15 +11,6 @@ export interface PrivateChatMessage {
   timestamp: string;
 }
 
-const MOCK_REPLIES = [
-  'Понял. Давай обсудим это без свидетелей.',
-  'У меня есть информация — но не для общего чата.',
-  'Ты уверен, что нам можно доверять?',
-  'Я видел странную активность у терминала.',
-  'Не говори об этом за столом.',
-  'Можем созвониться позже в кулуарах.',
-];
-
 function formatChatTime(date: Date): string {
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 }
@@ -29,34 +20,6 @@ function formatTs(ts?: string): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return formatChatTime(new Date());
   return formatChatTime(d);
-}
-
-function seedThread(partnerName: string): PrivateChatMessage[] {
-  const base = Date.now() - 18 * 60_000;
-  const stamps = [0, 2, 5].map((min) =>
-    formatChatTime(new Date(base + min * 60_000)),
-  );
-
-  return [
-    {
-      id: 'seed-1',
-      from: 'them',
-      text: `Привет. Это ${partnerName}. Нужно поговорить без лишних ушей.`,
-      timestamp: stamps[0]!,
-    },
-    {
-      id: 'seed-2',
-      from: 'me',
-      text: 'Слушаю. Что ты знаешь о последнем инциденте?',
-      timestamp: stamps[1]!,
-    },
-    {
-      id: 'seed-3',
-      from: 'them',
-      text: 'Вентиляция в секторе C работала на обратной тяге. Это не случайность.',
-      timestamp: stamps[2]!,
-    },
-  ];
 }
 
 function mapServerThread(raw: BackendPrivateThreadMessage[]): PrivateChatMessage[] {
@@ -86,9 +49,9 @@ interface PrivateChatStore {
   seededPartners: Record<string, boolean>;
   setLiveMode: (live: boolean) => void;
   setActivePartner: (playerId: string | null) => void;
-  ensureThread: (playerId: string, partnerName: string) => void;
+  ensureThread: (playerId: string, _partnerName: string) => void;
   markRead: (playerId: string) => void;
-  /** Mock: local append + auto-reply. Live: local append only (WS send is caller's job). */
+  /** Append local outbound message; Helixa replies arrive via WS. */
   sendMessage: (playerId: string, partnerName: string, text: string) => void;
   receiveMessage: (
     playerId: string,
@@ -100,7 +63,6 @@ interface PrivateChatStore {
   applyServerSync: (
     threads: Record<string, BackendPrivateThreadMessage[]>,
   ) => void;
-  clearThread: (playerId: string) => void;
   hydrate: (payload: {
     threads: Record<string, PrivateChatMessage[]>;
     unread: Record<string, number>;
@@ -132,25 +94,14 @@ export const usePrivateChatStore = create<PrivateChatStore>((set, get) => ({
     if (playerId) get().markRead(playerId);
   },
 
-  ensureThread: (playerId, partnerName) => {
-    const { threads, seededPartners, liveMode } = get();
+  ensureThread: (playerId, _partnerName) => {
+    const { threads, seededPartners } = get();
     if (seededPartners[playerId]) return;
-
-    if (liveMode) {
-      set({
-        threads: {
-          ...threads,
-          [playerId]: threads[playerId] ?? [],
-        },
-        seededPartners: { ...seededPartners, [playerId]: true },
-      });
-      return;
-    }
 
     set({
       threads: {
         ...threads,
-        [playerId]: threads[playerId] ?? seedThread(partnerName),
+        [playerId]: threads[playerId] ?? [],
       },
       seededPartners: { ...seededPartners, [playerId]: true },
     });
@@ -161,7 +112,7 @@ export const usePrivateChatStore = create<PrivateChatStore>((set, get) => ({
       unread: { ...state.unread, [playerId]: 0 },
     })),
 
-  sendMessage: (playerId, partnerName, text) => {
+  sendMessage: (playerId, _partnerName, text) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
@@ -180,16 +131,7 @@ export const usePrivateChatStore = create<PrivateChatStore>((set, get) => ({
     }));
 
     playUiSound('chatSend');
-
-    // Live: replies come from WS (Helixa). Mock: local auto-reply.
-    if (get().liveMode) return;
-
-    window.setTimeout(() => {
-      const reply =
-        MOCK_REPLIES[Math.floor(Math.random() * MOCK_REPLIES.length)] ??
-        MOCK_REPLIES[0]!;
-      get().receiveMessage(playerId, partnerName, reply);
-    }, 1400 + Math.random() * 1800);
+    // Replies arrive via WS (Helixa) in live sessions.
   },
 
   receiveMessage: (playerId, partnerName, text, options) => {
@@ -257,23 +199,6 @@ export const usePrivateChatStore = create<PrivateChatStore>((set, get) => ({
       // keep activePartnerId
     });
   },
-
-  clearThread: (playerId) =>
-    set((state) => {
-      const { [playerId]: _removedThread, ...threads } = state.threads;
-      const { [playerId]: _removedUnread, ...unread } = state.unread;
-      const { [playerId]: _removedSeed, ...seededPartners } = state.seededPartners;
-      const { [playerId]: _removedTyping, ...typingByPartner } =
-        state.typingByPartner;
-      return {
-        threads,
-        unread,
-        seededPartners,
-        typingByPartner,
-        activePartnerId:
-          state.activePartnerId === playerId ? null : state.activePartnerId,
-      };
-    }),
 
   hydrate: ({ threads, unread, seededPartners }) =>
     set({

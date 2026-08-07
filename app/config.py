@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     min_human_players: int = 1
     room_capacity: int = 8
+    # How many AI seats are SYNTHETIC (rest of AI seats + all humans = HUMAN).
+    # Agents never see this in Helixa prompts — system/dataset only.
+    synthetic_count: int = 2
     # Refreshed on every room write / event append
     room_ttl_seconds: int = 86400
     history_event_limit: int = 200

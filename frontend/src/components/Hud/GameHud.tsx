@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { HudChatLine } from '@/data/mockHud';
 import {
@@ -30,6 +30,9 @@ interface GameHudProps {
   votes?: Record<string, string>;
   clientId?: string | null;
   mockMode?: boolean;
+  panelOpen?: boolean;
+  onClosePanel?: () => void;
+  onOpenPanel?: () => void;
 }
 
 function pendingRevealCharacterId(
@@ -96,6 +99,9 @@ export function GameHud({
   votes = {},
   clientId,
   mockMode = false,
+  panelOpen = true,
+  onClosePanel,
+  onOpenPanel,
 }: GameHudProps) {
   const [forceVoting, setForceVoting] = useState(false);
 
@@ -130,10 +136,6 @@ export function GameHud({
     setForceVoting(true);
   }, []);
 
-  if (!visible) return null;
-
-  const hudMessages: HudChatLine[] = chatMessagesToHudLines(chat, players, myProfile);
-
   const isMyRevealTurn = Boolean(
     isMyTurnToReveal ||
       (myProfile && pendingRevealId === myProfile.characterId),
@@ -141,6 +143,21 @@ export function GameHud({
 
   const isVotingMode =
     forceVoting || gamePhase === 'VOTE' || isInVoteWindow(gamePhase, remaining);
+
+  const forcePanelOpen = isMyRevealTurn || isVotingMode;
+  const wasForceOpen = useRef(false);
+
+  // Auto-open once when reveal/vote starts; allow user to close afterwards.
+  useEffect(() => {
+    if (forcePanelOpen && !wasForceOpen.current) {
+      onOpenPanel?.();
+    }
+    wasForceOpen.current = forcePanelOpen;
+  }, [forcePanelOpen, onOpenPanel]);
+
+  if (!visible || !panelOpen) return null;
+
+  const hudMessages: HudChatLine[] = chatMessagesToHudLines(chat, players, myProfile);
 
   const voterId = clientId ?? myProfile?.id;
   const hasVoted = Boolean(voterId && votes[voterId]);
@@ -160,7 +177,7 @@ export function GameHud({
         onSend={onSendMessage}
         inputDisabled={isMyRevealTurn}
         typing={typing}
-        topOffsetClass="top-12 sm:top-14"
+        topOffsetClass="top-4"
         gamePhase={gamePhase}
         revealPlayer={revealPlayer}
         isMyRevealTurn={isMyRevealTurn}
@@ -173,6 +190,7 @@ export function GameHud({
         mockMode={mockMode}
         onMockStartVoting={handleMockStartVoting}
         forceVoting={forceVoting}
+        onClose={onClosePanel}
       />
     </div>
   );

@@ -36,6 +36,7 @@ services:
   api:
     build: .
     container_name: turing_sandbox_api
+    # .env.example = defaults; project .env overrides (Compose interpolates ${HELIXA_*} from .env)
     env_file:
       - .env.example
     environment:
@@ -46,6 +47,12 @@ services:
       CORS_ORIGINS: "*"
       MIN_HUMAN_PLAYERS: "1"
       ROOM_CAPACITY: "8"
+      SYNTHETIC_COUNT: ${SYNTHETIC_COUNT:-2}
+      HELIXA_BASE_URL: ${HELIXA_BASE_URL:-http://localhost:8000}
+      HELIXA_INTERNAL_TOKEN: ${HELIXA_INTERNAL_TOKEN:-}
+      HELIXA_ENABLED: ${HELIXA_ENABLED:-true}
+      HELIXA_TIMEOUT_SECONDS: ${HELIXA_TIMEOUT_SECONDS:-4.0}
+      HELIXA_RESOLVE_TIMEOUT_SECONDS: ${HELIXA_RESOLVE_TIMEOUT_SECONDS:-2.5}
     ports:
       # Host 8003 — 8001/8002 taken by saas-django/saas-agent (WSL-friendly)
       - "8003:8000"

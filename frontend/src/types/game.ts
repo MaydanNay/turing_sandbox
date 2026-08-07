@@ -57,12 +57,13 @@ export interface MyProfile {
 
 /** Client → server WS payload */
 export interface WsOutboundAction {
-  action: 'chat' | 'pitch' | 'vote' | 'phase' | 'private_chat_send';
-  type?: 'private_chat_send';
+  action: 'chat' | 'pitch' | 'vote' | 'phase' | 'private_chat_send' | 'reveal_card';
+  type?: 'private_chat_send' | 'reveal_card';
   text?: string;
   payload?: Record<string, unknown>;
   phase?: string;
   agent_id?: string;
+  card_id?: string;
 }
 
 /** Spec-style inbound message (future / extended protocol) */
@@ -78,6 +79,7 @@ export interface WsClientMessage {
 export interface BackendPlayerInfo {
   client_id: string;
   role: string | null;
+  character_id?: string | null;
   is_ai: boolean;
   connected: boolean;
 }
@@ -204,6 +206,42 @@ export interface BackendPrivateChatSyncMessage {
   ts: string;
 }
 
+export interface BackendHandCard {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  is_revealed?: boolean;
+  isRevealed?: boolean;
+  image_hint?: string | null;
+  imageUrl?: string;
+}
+
+export interface BackendHandMessage {
+  type: 'hand';
+  room_id: string;
+  client_id?: string;
+  cards: BackendHandCard[];
+  ts: string;
+}
+
+export interface BackendCardRevealedMessage {
+  type: 'card_revealed';
+  room_id: string;
+  client_id: string;
+  character_id?: string | null;
+  card: BackendHandCard;
+  ts: string;
+}
+
+export interface BackendRevealedCardsSyncMessage {
+  type: 'revealed_cards_sync';
+  room_id: string;
+  client_id?: string;
+  by_player: Record<string, BackendHandCard[]>;
+  ts: string;
+}
+
 export type BackendWsMessage =
   | BackendStateMessage
   | BackendPhaseChangedMessage
@@ -214,7 +252,10 @@ export type BackendWsMessage =
   | BackendHistoryMessage
   | BackendPrivateChatTypingMessage
   | BackendPrivateChatMessage
-  | BackendPrivateChatSyncMessage;
+  | BackendPrivateChatSyncMessage
+  | BackendHandMessage
+  | BackendCardRevealedMessage
+  | BackendRevealedCardsSyncMessage;
 
 export interface SessionCreateResponse {
   session_id: string;

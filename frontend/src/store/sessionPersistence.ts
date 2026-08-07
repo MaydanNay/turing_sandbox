@@ -1,3 +1,4 @@
+import type { PlayerHandCard } from '@/types/card';
 import type { ChatMessage, GamePhase, MyProfile, Player } from '@/types/game';
 import type { PrivateChatMessage } from '@/store/privateChatStore';
 
@@ -16,15 +17,23 @@ export interface UiSnapshot {
   clientId: string;
   gameState: GamePhase;
   gatheredAtTable: boolean;
+  /** Personal sits outside a full meeting (optional for older snapshots). */
+  seatedPlayerIds?: string[];
+  meetingCallsUsed?: number;
+  lastMeetingCallAt?: number | null;
   brigCharacterIds: string[];
   votes: Record<string, string>;
   sessionAges: Record<string, number>;
   players: Player[];
   chat: ChatMessage[];
   myProfile: MyProfile | null;
+  myHand?: PlayerHandCard[];
+  revealedByPlayer?: Record<string, PlayerHandCard[]>;
   privateThreads: Record<string, PrivateChatMessage[]>;
   privateUnread: Record<string, number>;
   privateSeeded: Record<string, boolean>;
+  /** Standing outpost positions in scene % (optional for older snapshots). */
+  outpostPositions?: Record<string, { x: number; y: number; scale: number }>;
   updatedAt: number;
 }
 

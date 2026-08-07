@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { playCardHoverSoundEffect, playUiSound } from '@/audio/uiSounds';
 import { InspectCardOverlay } from '@/components/Hand/InspectCardOverlay';
 import { CardFrontFace } from '@/components/Hand/CardFaces';
-import { getRevealedCardsForPlayer } from '@/data/mockPlayerHands';
+import { EMPTY_CARDS, useGameStore } from '@/store/gameStore';
 import type { CardType, PlayerHandCard } from '@/types/card';
 import { cardRevealLabel } from '@/utils/cardLabel';
 
@@ -64,10 +64,12 @@ interface RevealedCardTabsProps {
   characterId: string;
 }
 
-/** Вкладки над чатом — раскрытые карты собеседника (без карты персонажа) */
+/** Вкладки над чатом — раскрытые карты собеседника (без карты персонажа и secret) */
 export function RevealedCardTabs({ characterId }: RevealedCardTabsProps) {
   const [inspectedCard, setInspectedCard] = useState<PlayerHandCard | null>(null);
-  const revealed = getRevealedCardsForPlayer(characterId);
+  const revealed = useGameStore(
+    (s) => s.revealedByPlayer[characterId] ?? EMPTY_CARDS,
+  );
 
   if (revealed.length === 0) return null;
 

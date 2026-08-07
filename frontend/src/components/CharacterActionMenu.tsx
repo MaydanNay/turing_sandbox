@@ -3,14 +3,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const MENU_WIDTH = 200;
-const MENU_ESTIMATED_HEIGHT = 168;
+const MENU_ESTIMATED_HEIGHT = 120;
 
 interface CharacterActionMenuProps {
   playerName: string;
   open: boolean;
   anchor: DOMRect | null;
   onTalk: () => void;
-  onDelete: () => void;
   onCancel: () => void;
 }
 
@@ -39,7 +38,6 @@ export function CharacterActionMenu({
   open,
   anchor,
   onTalk,
-  onDelete,
   onCancel,
 }: CharacterActionMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -115,13 +113,6 @@ export function CharacterActionMenu({
             >
               Пообщаться
             </button>
-            <button
-              type="button"
-              onClick={onDelete}
-              className="rounded border border-bunker-danger/40 bg-black/70 px-4 py-2.5 font-mono text-[10px] uppercase tracking-widest text-bunker-danger transition hover:border-bunker-danger hover:bg-bunker-danger/15"
-            >
-                Ударить
-              </button>
             <button
               type="button"
               onClick={onCancel}

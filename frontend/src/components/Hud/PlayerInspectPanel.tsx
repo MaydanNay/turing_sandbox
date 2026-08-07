@@ -7,7 +7,7 @@ import { buildPortraitSrc } from '@/components/PrivateChat/CharacterPortraitLaye
 import { ASSETS, hasCharacterCard } from '@/config/assets';
 import { getCharacterById, genderLabel } from '@/data/characters';
 import { getCharacterChatAccent } from '@/data/characterChatAccent';
-import { getRevealedCardsForPlayer } from '@/data/mockPlayerHands';
+import { EMPTY_CARDS, useGameStore } from '@/store/gameStore';
 import type { PlayerHandCard } from '@/types/card';
 import type { Player } from '@/types/game';
 import { cardRevealLabel } from '@/utils/cardLabel';
@@ -138,7 +138,9 @@ export function PlayerInspectView({
   const role = roster?.role ?? character?.role ?? '—';
   const gender = roster?.gender ?? character?.gender;
 
-  const revealedCards = getRevealedCardsForPlayer(characterId);
+  const revealedCards = useGameStore(
+    (s) => s.revealedByPlayer[characterId] ?? EMPTY_CARDS,
+  );
 
   const subtitleParts: string[] = [];
   if (age !== undefined) subtitleParts.push(`${age} лет`);
