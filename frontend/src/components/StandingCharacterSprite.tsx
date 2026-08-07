@@ -51,9 +51,20 @@ export function StandingCharacterSprite({
     ? ASSETS.characters.default
     : ASSETS.characters.chibi(player.characterId);
   const width = OUTPOST_BASE_WIDTH * layout.scale;
-  const fromRef = useRef({ x: layout.x, y: layout.y });
-  const targetKeyRef = useRef(`${layout.x},${layout.y}`);
-  const durationRef = useRef(0.35);
+  const [initialState] = useState(() => {
+    const store = useOutpostMovementStore.getState();
+    const feet = store.getFeet(player.id);
+    const anim = store.moveAnim[player.id];
+    const isMidAnim = Boolean(anim && (performance.now() - anim.startedAt < anim.durationMs + 100));
+    return {
+      pos: feet ? { x: feet.x, y: feet.y } : { x: layout.x, y: layout.y },
+      isMidAnim,
+    };
+  });
+
+  const fromRef = useRef({ x: initialState.pos.x, y: initialState.pos.y });
+  const targetKeyRef = useRef('');
+  const durationRef = useRef(0);
   const moveGen = useRef(0);
 
   const markTone = playerMarkTone({
@@ -73,7 +84,9 @@ export function StandingCharacterSprite({
       Math.abs(storeAnim.toY - layout.y) < 0.05
     ) {
       fromRef.current = { x: storeAnim.fromX, y: storeAnim.fromY };
-      durationRef.current = storeAnim.durationMs / 1000;
+      const elapsed = (performance.now() - storeAnim.startedAt) / 1000;
+      const total = storeAnim.durationMs / 1000;
+      durationRef.current = Math.max(0.05, total - Math.max(0, elapsed));
     } else {
       durationRef.current = moveDurationSeconds(
         fromRef.current.x,
@@ -131,7 +144,11 @@ export function StandingCharacterSprite({
         zIndex: unreadCount > 0 ? zIndex + 2 : zIndex,
         ...CHIBI_ANCHOR,
       }}
-      initial={{ opacity: 0, left: `${layout.x}%`, top: `${layout.y}%` }}
+      initial={{ 
+        opacity: initialState.isMidAnim ? 1 : 0, 
+        left: `${initialState.pos.x}%`, 
+        top: `${initialState.pos.y}%` 
+      }}
       animate={{
         opacity: 1,
         left: `${layout.x}%`,
