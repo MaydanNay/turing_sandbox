@@ -360,7 +360,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   addChatMessage: (msg) =>
     set((s) => ({
-      chat: [...s.chat, { ...msg, id: crypto.randomUUID() }],
+      chat: [...s.chat, { ...msg, id: window.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2) }],
     })),
 
   recordCardReveal: (playerName, card, subtitle) => {
@@ -504,7 +504,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (action === 'join') {
         const cid = String(payload.client_id ?? ev.user_id ?? 'unknown');
         lines.push({
-          id: crypto.randomUUID(),
+          id: window.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2),
           sender: 'Система',
           text: `>>> ${cid}${ev.is_ai ? ' (AI)' : ''} подключился к каналу.`,
           timestamp: ts,
@@ -517,7 +517,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (action === 'phase') {
         const phase = String(payload.phase ?? 'UNKNOWN');
         lines.push({
-          id: crypto.randomUUID(),
+          id: window.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2),
           sender: 'Система',
           text: `>>> ФАЗА: ${phase.toUpperCase()}`,
           timestamp: ts,
@@ -535,7 +535,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         const text = typeof payload.text === 'string' ? payload.text : '';
         if (!text && action !== 'vote') continue;
         lines.push({
-          id: crypto.randomUUID(),
+          id: window.crypto?.randomUUID?.() ?? Math.random().toString(36).substring(2),
           sender: senderName,
           text: text || `[${action}]`,
           timestamp: ts,

@@ -101,7 +101,7 @@ async def finish_session(
         except ValueError as exc:
             raise ValueError("session_id is required to finish") from exc
 
-    events = await redis_store.pop_all_events(room_id) if state is not None else []
+    events = await redis_store.list_events(room_id, limit=0) if state is not None else []
     persisted = 0
 
     async with AsyncSessionLocal() as db:

@@ -20,7 +20,7 @@ from app.mock_agent import ensure_mock_agents
 from app.models import GameSession, SessionStatus
 from app.redis_state import redis_store
 from app.schemas import Phase
-from app.services.helixa_adapter import request_private_reply
+from app.services.helixa_adapter import FALLBACK_REPLY, request_private_reply
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,7 @@ async def _private_agent_reply(
                 "client_id": agent_id,
                 "human_id": human_id,
                 "agent_id": agent_id,
-                "text": "[Терминал Аванпоста: сбой связи с нейроузлом]",
+                "text": FALLBACK_REPLY,
                 "from": "them",
                 "is_ai": True,
                 "ts": _now_iso(),

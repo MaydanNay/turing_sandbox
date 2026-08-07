@@ -47,8 +47,15 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const setConnectionMeta = useGameStore((s) => s.setConnectionMeta);
   const setError = useGameStore((s) => s.setError);
 
+  const reconnectTimeoutRef = useRef<number | null>(null);
+
   const disconnect = useCallback(() => {
-    wsRef.current?.close();
+    if (reconnectTimeoutRef.current !== null) {
+      window.clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    // Code 4000 indicates intentional manual disconnect
+    wsRef.current?.close(4000);
     wsRef.current = null;
     setConnected(false);
   }, [setConnected]);
@@ -63,8 +70,22 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
-      ws.onopen = () => setConnected(true);
-      ws.onclose = () => setConnected(false);
+      ws.onopen = () => {
+        setConnected(true);
+        if (reconnectTimeoutRef.current !== null) {
+          window.clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+        }
+      };
+      ws.onclose = (e) => {
+        setConnected(false);
+        // Do not auto-reconnect if closed normally (e.g., manual disconnect)
+        if (e.code !== 1000 && e.code !== 4000) {
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            connect(roomId, clientId);
+          }, 3000); // 3 seconds backoff
+        }
+      };
       ws.onerror = () => setError('WebSocket connection error');
       ws.onmessage = (event: MessageEvent<string>) => {
         try {
