@@ -19,8 +19,8 @@ export function FloorClickMarker({ x, y, markerId, onDone }: FloorClickMarkerPro
     <AnimatePresence>
       <motion.div
         key={markerId}
-        className="pointer-events-none absolute z-[2] -translate-x-1/2 -translate-y-1/2"
-        style={{ left: `${x}%`, top: `${y}%` }}
+        className="pointer-events-none absolute z-[2]"
+        style={{ left: `${x}%`, top: `${y}%`, x: '-50%', y: '-50%' }}
         initial={{ opacity: 0.95, scale: 0.55 }}
         animate={{ opacity: [0.95, 0.75, 0], scale: [0.55, 1.05, 1.35] }}
         transition={{ duration: 0.85, ease: 'easeOut' }}

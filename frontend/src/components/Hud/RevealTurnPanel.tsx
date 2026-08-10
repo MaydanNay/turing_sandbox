@@ -123,7 +123,7 @@ export function RevealTurnPanel({ cards, onRevealCard }: RevealTurnPanelProps) {
             </p>
           </div>
 
-          <div className="flex shrink-0 items-end gap-5 overflow-x-auto overflow-y-visible pb-1 sm:gap-6">
+          <div className="flex shrink-0 items-end gap-5 overflow-x-auto pt-4 pb-1 sm:gap-6">
             {displayCards.map((card, index) => (
               <RevealPickCard
                 key={card.id}

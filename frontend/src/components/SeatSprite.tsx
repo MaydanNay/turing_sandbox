@@ -1,15 +1,18 @@
-import { motion } from 'framer-motion';
-import { useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useEffect, useRef, useState } from 'react';
 
 import { playUiSound } from '@/audio/uiSounds';
 import {
   PlayerFootOval,
+  SelfPlayerMarker,
   playerMarkTone,
   playerNameplateClass,
+  playerNameplateLabel,
 } from '@/components/PlayerTargetMark';
 import { PrivateMessageBadge } from '@/components/PrivateChat/PrivateMessageBadge';
 import { seatSprite } from '@/config/assets';
 import { genderLabel } from '@/data/characters';
+import { useGameStore } from '@/store/gameStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import type { Player } from '@/types/game';
 import { SEAT_BASE_WIDTH, type SeatLayout } from '@/utils/seatPositions';
@@ -25,6 +28,7 @@ interface SeatSpriteProps {
   onOpenPrivateChat?: (id: string, anchor: DOMRect) => void;
   /** Клик по своему месту — встать из-за стола */
   onStandUp?: () => void;
+  style?: React.CSSProperties;
 }
 
 /** % ширины группы сцены на один спрайт стула — см. SEAT_BASE_WIDTH в seatPositions.ts */
@@ -45,8 +49,60 @@ export function SeatSprite({
   onSelect,
   onOpenPrivateChat,
   onStandUp,
+  style,
 }: SeatSpriteProps) {
   const [hovered, setHovered] = useState(false);
+  const [activeSpeech, setActiveSpeech] = useState<{ id: string; text: string } | null>(null);
+
+  const chatMessages = useGameStore((s) => s.chat);
+  const privateThread = usePrivateChatStore((s) => s.threads[player.id]);
+
+  const prevChatLen = useRef(chatMessages.length);
+  const prevPrivLen = useRef(privateThread?.length ?? 0);
+
+  useEffect(() => {
+    let newCandidate: { id: string; text: string } | null = null;
+
+    if (chatMessages.length > prevChatLen.current) {
+      const lastMsg = chatMessages[chatMessages.length - 1];
+      if (
+        lastMsg &&
+        lastMsg.kind === 'message' &&
+        (lastMsg.sender === player.name ||
+          lastMsg.sender === player.characterId ||
+          lastMsg.sender === player.id)
+      ) {
+        newCandidate = { id: lastMsg.id, text: lastMsg.text };
+      }
+    }
+
+    if (privateThread && privateThread.length > prevPrivLen.current) {
+      const lastPriv = privateThread[privateThread.length - 1];
+      if (lastPriv && lastPriv.from === 'them') {
+        newCandidate = { id: lastPriv.id, text: lastPriv.text };
+      }
+    }
+
+    prevChatLen.current = chatMessages.length;
+    prevPrivLen.current = privateThread?.length ?? 0;
+
+    if (newCandidate) {
+      const { id, text } = newCandidate;
+      setActiveSpeech((curr) => {
+        if (curr?.id === id) return curr;
+        let t = text;
+        if (t.length > 70) t = t.slice(0, 67) + '...';
+        return { id, text: t };
+      });
+    }
+  }, [chatMessages, privateThread, player.name, player.characterId, player.id]);
+
+  useEffect(() => {
+    if (!activeSpeech) return;
+    const timer = window.setTimeout(() => setActiveSpeech(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [activeSpeech]);
+
   const unreadCount = usePrivateChatStore((s) => s.unread[player.id] ?? 0);
   const src = seatSprite(seatNumber, player.characterId, player.is_alive);
   const suspicion = player.suspicion_score;
@@ -71,6 +127,7 @@ export function SeatSprite({
         top: `${layout.y}%`,
         width: `${width}%`,
         zIndex: displayZIndex,
+        ...style,
         ...SEAT_ANCHOR_STYLE,
       }}
       initial={{ opacity: 0 }}
@@ -101,7 +158,7 @@ export function SeatSprite({
       }
     >
       <motion.div
-        className={`relative ${isSelf ? 'drop-shadow-[0_0_4px_rgba(57,255,20,0.35)]' : ''}`}
+        className="relative"
         animate={
           criticalSuspicion
             ? { x: [0, -2, 2, 0] }
@@ -117,6 +174,25 @@ export function SeatSprite({
       >
         <PlayerFootOval tone={markTone} />
         <div className="relative z-[1] w-full">
+          <AnimatePresence>
+            {activeSpeech && (
+              <motion.div
+                key={activeSpeech.id}
+                initial={{ opacity: 0, scale: 0.8, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.8, y: 10 }}
+                transition={{ duration: 0.2 }}
+                className="absolute bottom-[100%] left-1/2 z-[10] mb-2 w-max max-w-[180px] -translate-x-1/2 pointer-events-none"
+              >
+                <div className="relative rounded-2xl bg-white/95 px-3 py-2 text-sm font-medium text-slate-800 shadow-xl backdrop-blur-sm border border-slate-200">
+                  <p className="whitespace-pre-wrap break-words leading-tight">{activeSpeech.text}</p>
+                  <div className="absolute top-[100%] left-1/2 -mt-[6px] -translate-x-1/2 w-3 h-3 bg-white/95 border-b border-r border-slate-200 rotate-45" />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          
+          {isSelf && <SelfPlayerMarker />}
           {!isSelf && player.is_alive && (
             <PrivateMessageBadge count={unreadCount} variant="seated" />
           )}
@@ -129,8 +205,8 @@ export function SeatSprite({
         </div>
 
         <div className="absolute bottom-0 left-1/2 z-[1] w-[130%] -translate-x-1/2 translate-y-full pt-0.5 text-center">
-          <span className={playerNameplateClass(isSelf ? 'idle' : markTone)}>
-            {player.name}
+          <span className={playerNameplateClass(markTone)}>
+            {playerNameplateLabel(player.name, markTone)}
           </span>
         </div>
 
@@ -164,8 +240,8 @@ interface EmptySeatSpriteProps {
   layout: SeatLayout;
   zIndex: number;
   onClick?: () => void;
-  /** Hover lift + clickable */
   interactive?: boolean;
+  style?: React.CSSProperties;
 }
 
 export function EmptySeatSprite({
@@ -173,6 +249,7 @@ export function EmptySeatSprite({
   layout,
   zIndex,
   onClick,
+  style,
   interactive = false,
 }: EmptySeatSpriteProps) {
   const width = BASE_WIDTH_PERCENT * layout.scale;
@@ -222,6 +299,7 @@ export function EmptySeatSprite({
         top: `${layout.y}%`,
         width: `${width}%`,
         zIndex,
+        ...style,
         ...SEAT_ANCHOR_STYLE,
       }}
     >

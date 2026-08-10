@@ -9,6 +9,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.connection_manager import manager
+from app.event_bus import event_bus
 from app.mock_agent import start_mock_agent_supervisor
 from app.redis_state import redis_store
 from app.routers import api_router
@@ -23,6 +25,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await redis_store.connect()
+    pubsub_task = await manager.start_pubsub()
+    event_bus_task = await event_bus.start_pubsub()
     supervisor = start_mock_agent_supervisor()
     logger.info(
         "Turing Sandbox API up on %s:%s (CORS=%s)",
@@ -34,6 +38,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         supervisor.cancel()
+        event_bus_task.cancel()
+        pubsub_task.cancel()
         await redis_store.close()
         logger.info("Turing Sandbox API shut down")
 

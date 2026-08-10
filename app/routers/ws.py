@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
 
-ALLOWED_ACTIONS = {"chat", "pitch", "vote", "phase", "private_chat_send", "reveal_card"}
+ALLOWED_ACTIONS = {"chat", "pitch", "vote", "phase", "private_chat_send", "reveal_card", "move_to", "ping"}
 
 
 async def _session_is_finished(room_id: str) -> bool:
@@ -421,7 +421,7 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
 
     try:
         while True:
-            data = await websocket.receive_json()
+            data = await asyncio.wait_for(websocket.receive_json(), timeout=65.0)
             if not isinstance(data, dict):
                 continue
             action = _inbound_action(data)
@@ -433,6 +433,18 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
                         "type": "error",
                         "room_id": room_id,
                         "text": f"Unknown action '{action}'. Use: {sorted(ALLOWED_ACTIONS)}",
+                        "ts": _now_iso(),
+                    },
+                )
+                continue
+
+            if action == "ping":
+                await manager.send_personal(
+                    room_id,
+                    client_id,
+                    {
+                        "type": "pong",
+                        "room_id": room_id,
                         "ts": _now_iso(),
                     },
                 )
@@ -518,6 +530,8 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
             await manager.broadcast(room_id, out)
             await event_bus.publish("message", out)
 
+    except asyncio.TimeoutError:
+        logger.info("client timeout room=%s client=%s", room_id, client_id)
     except WebSocketDisconnect:
         logger.info("client disconnected room=%s client=%s", room_id, client_id)
     except Exception:

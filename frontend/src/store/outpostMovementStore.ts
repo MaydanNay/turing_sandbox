@@ -8,6 +8,7 @@ import {
   pointInWalkable,
   pushOutOfObstacles,
   standUpSpawnForSeat,
+  type CircleObstacle,
 } from '@/utils/outpostCollision';
 import { getOutpostSpot } from '@/utils/seatPositions';
 
@@ -31,17 +32,24 @@ const MOVE_SPEED_PCT_PER_S = 20;
 const MOVE_DURATION_MIN_S = 0.35;
 const MOVE_DURATION_MAX_S = 2.4;
 const NEAR_EPS = 0.08;
+/** How far ahead (%) WASD aims each refresh — ~0.2s at walk speed */
+const STEER_LOOKAHEAD_PCT = MOVE_SPEED_PCT_PER_S * 0.2;
 
 export function moveDurationSeconds(
   fromX: number,
   fromY: number,
   toX: number,
   toY: number,
+  opts?: { preciseTiming?: boolean },
 ): number {
   const d = Math.hypot(toX - fromX, toY - fromY);
+  const raw = d / MOVE_SPEED_PCT_PER_S;
+  if (opts?.preciseTiming) {
+    return Math.min(MOVE_DURATION_MAX_S, Math.max(0.05, raw));
+  }
   return Math.min(
     MOVE_DURATION_MAX_S,
-    Math.max(MOVE_DURATION_MIN_S, d / MOVE_SPEED_PCT_PER_S),
+    Math.max(MOVE_DURATION_MIN_S, raw),
   );
 }
 
@@ -77,8 +85,17 @@ interface OutpostMovementState {
     playerId: string,
     x: number,
     y: number,
-    opts?: { passThroughSeat?: number },
+    opts?: { passThroughSeat?: number; preciseTiming?: boolean },
   ) => void;
+  /**
+   * Continuous WASD steer: aim a short walkable point in `dir` from current feet.
+   * Returns the goal used, or null if no move.
+   */
+  steer: (
+    playerId: string,
+    dirX: number,
+    dirY: number,
+  ) => { x: number; y: number } | null;
   /** Advance to next waypoint. Returns true if arrived at final destination. */
   advancePath: (playerId: string) => boolean;
   setPendingSit: (playerId: string | null) => void;
@@ -130,9 +147,10 @@ function sampleFeet(
 function beginAnim(
   from: { x: number; y: number },
   to: { x: number; y: number },
+  opts?: { preciseTiming?: boolean },
 ): MoveAnim {
   const durationMs =
-    moveDurationSeconds(from.x, from.y, to.x, to.y) * 1000;
+    moveDurationSeconds(from.x, from.y, to.x, to.y, opts) * 1000;
   return {
     fromX: from.x,
     fromY: from.y,
@@ -234,7 +252,30 @@ export const useOutpostMovementStore = create<OutpostMovementState>((set, get) =
     const state = get();
     const prev = state.positions[playerId];
     const scale = prev?.scale ?? 0.9;
-    const obstacles = getOutpostObstacles(opts);
+    const dynamicObstacles: CircleObstacle[] = [];
+    for (const [otherId, pos] of Object.entries(state.positions)) {
+      if (otherId === playerId) continue;
+      
+      const path = state.remainingPath[otherId];
+      let obsX = pos.x;
+      let obsY = pos.y;
+      if (path && path.length > 0) {
+        const last = path[path.length - 1];
+        if (last) {
+          obsX = last.x;
+          obsY = last.y;
+        }
+      }
+      dynamicObstacles.push({
+        id: `player_${otherId}`,
+        cx: obsX,
+        cy: obsY,
+        r: 3.5,
+      });
+    }
+
+    const optsWithDyn = { ...opts, dynamicObstacles };
+    const obstacles = getOutpostObstacles(optsWithDyn);
 
     // Path from where the sprite actually is, not the unfinished waypoint
     const feet =
@@ -247,7 +288,7 @@ export const useOutpostMovementStore = create<OutpostMovementState>((set, get) =
         ? { x, y }
         : pushOutOfObstacles({ x, y }, obstacles);
 
-    let waypoints = findOutpostPath(from, goal, opts);
+    let waypoints = findOutpostPath(from, goal, optsWithDyn);
     if (waypoints.length === 0) {
       // Keep current walk — a failed repath must not freeze mid-step
       return;
@@ -276,7 +317,9 @@ export const useOutpostMovementStore = create<OutpostMovementState>((set, get) =
 
     const first = waypoints[0]!;
     const rest = waypoints.slice(1);
-    const anim = beginAnim(from, first);
+    const anim = beginAnim(from, first, {
+      preciseTiming: opts?.preciseTiming,
+    });
 
     set({
       positions: {
@@ -296,6 +339,30 @@ export const useOutpostMovementStore = create<OutpostMovementState>((set, get) =
         [playerId]: anim,
       },
     });
+  },
+
+  steer: (playerId, dirX, dirY) => {
+    const len = Math.hypot(dirX, dirY);
+    if (len < 1e-6) return null;
+    const nx = dirX / len;
+    const ny = dirY / len;
+    const feet = get().getFeet(playerId);
+    if (!feet) return null;
+    const goal = {
+      x: feet.x + nx * STEER_LOOKAHEAD_PCT,
+      y: feet.y + ny * STEER_LOOKAHEAD_PCT,
+    };
+    get().setTarget(playerId, goal.x, goal.y, { preciseTiming: true });
+    const state = get();
+    const pos = state.positions[playerId];
+    if (!pos) return null;
+    const path = state.remainingPath[playerId];
+    const final =
+      path && path.length > 0
+        ? path[path.length - 1]!
+        : { x: pos.x, y: pos.y };
+    if (dist(feet.x, feet.y, final.x, final.y) <= NEAR_EPS) return null;
+    return final;
   },
 
   advancePath: (playerId) => {

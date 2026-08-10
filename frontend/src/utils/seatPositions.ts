@@ -48,8 +48,7 @@ export function getOutpostSpot(seatNumber: number): SeatLayout {
   return OUTPOST_LAYOUT.spots[index] ?? OUTPOST_LAYOUT.spots[0] ?? { x: 50, y: 50, scale: 0.9 };
 }
 
-/** Convert seat coords (% inside SCENE_GROUP) to full-scene % for standing walk. */
-export function seatLayoutToScenePos(seat: SeatLayout): { x: number; y: number } {
+export function seatLayoutToScenePos(seat: { x: number; y: number; [key: string]: any }): { x: number; y: number } {
   const w = SCENE_GROUP.widthPercent;
   return {
     x: SCENE_GROUP.x + (seat.x / 100 - 0.5) * w,
@@ -57,7 +56,11 @@ export function seatLayoutToScenePos(seat: SeatLayout): { x: number; y: number }
   };
 }
 
-/** Soft wander box for AI / clicks (% of scene). Keep ≥ walkable polygon bbox. */
+export function depthZ(sceneY: number, tieBreak = 0): number {
+  return Math.round(sceneY * 10) * 100 + tieBreak;
+}
+
+/** Soft wander box for AI / clicks (% of scene). Keep >= walkable polygon bbox. */
 export const OUTPOST_WANDER_BOUNDS = {
   minX: 0,
   maxX: 95,
@@ -108,11 +111,14 @@ export function getSeatLayout(seatNumber: number): SeatLayout {
 }
 
 export function seatZIndex(layout: SeatLayout): number {
-  return layout.behindTable ? 8 : 30;
+  const pos = seatLayoutToScenePos(layout);
+  // tieBreak ensures chairs sort correctly among characters at exactly same Y
+  return depthZ(pos.y, layout.behindTable ? -150 : 150);
 }
 
 export function tableZIndex(): number {
-  return 20;
+  const pos = seatLayoutToScenePos({ x: SCENE_LAYOUT.table.x, y: SCENE_LAYOUT.table.y });
+  return depthZ(pos.y, 0);
 }
 
 export function clampSuspicion(score: number): number {

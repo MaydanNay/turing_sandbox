@@ -41,6 +41,7 @@ function isClientMessage(data: unknown): data is WsClientMessage {
 
 export function WebSocketProvider({ children }: { children: ReactNode }) {
   const wsRef = useRef<WebSocket | null>(null);
+  const queueRef = useRef<WsOutboundAction[]>([]);
   const handleBackendMessage = useGameStore((s) => s.handleBackendMessage);
   const handleClientMessage = useGameStore((s) => s.handleClientMessage);
   const setConnected = useGameStore((s) => s.setConnected);
@@ -48,11 +49,16 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const setError = useGameStore((s) => s.setError);
 
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const pingIntervalRef = useRef<number | null>(null);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current !== null) {
       window.clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
+    }
+    if (pingIntervalRef.current !== null) {
+      window.clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
     }
     // Code 4000 indicates intentional manual disconnect
     wsRef.current?.close(4000);
@@ -76,8 +82,21 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
           window.clearTimeout(reconnectTimeoutRef.current);
           reconnectTimeoutRef.current = null;
         }
+        if (queueRef.current.length > 0) {
+          queueRef.current.forEach((msg) => ws.send(JSON.stringify(msg)));
+          queueRef.current = [];
+        }
+        pingIntervalRef.current = window.setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'ping' }));
+          }
+        }, 30000); // Send ping every 30s
       };
       ws.onclose = (e) => {
+        if (pingIntervalRef.current !== null) {
+          window.clearInterval(pingIntervalRef.current);
+          pingIntervalRef.current = null;
+        }
         setConnected(false);
         // Do not auto-reconnect if closed normally (e.g., manual disconnect)
         if (e.code !== 1000 && e.code !== 4000) {
@@ -113,6 +132,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const send = useCallback((payload: WsOutboundAction) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(payload));
+    } else {
+      queueRef.current.push(payload);
     }
   }, []);
 

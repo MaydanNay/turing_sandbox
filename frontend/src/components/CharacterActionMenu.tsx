@@ -118,7 +118,7 @@ export function CharacterActionMenu({
               onClick={onCancel}
               className="rounded border border-bunker-border/80 bg-black/70 px-4 py-2.5 font-mono text-[10px] uppercase tracking-widest text-bunker-muted transition hover:border-bunker-neon/40 hover:text-bunker-neon"
             >
-              Отмена
+              Отойти
             </button>
           </div>
         </motion.div>

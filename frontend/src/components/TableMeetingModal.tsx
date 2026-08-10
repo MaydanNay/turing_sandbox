@@ -106,7 +106,7 @@ export function TableMeetingModal({
                 type="button"
                 disabled={!gate.ok}
                 onClick={onCallMeeting}
-                className="w-full rounded-lg px-3 py-3 text-left font-mono text-[11px] uppercase tracking-widest text-rose-200 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:text-bunker-muted disabled:hover:bg-transparent"
+                className="w-full rounded-lg px-3 py-3 text-center font-mono text-[11px] uppercase tracking-widest text-rose-200 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:text-bunker-muted disabled:hover:bg-transparent"
               >
                 {gate.ok
                   ? 'Созвать всех'
@@ -117,7 +117,7 @@ export function TableMeetingModal({
               <button
                 type="button"
                 onClick={onCancel}
-                className="w-full rounded-lg px-3 py-3 text-left font-mono text-[11px] uppercase tracking-widest text-bunker-muted transition hover:bg-white/5"
+                className="w-full rounded-lg px-3 py-3 text-center font-mono text-[11px] uppercase tracking-widest text-bunker-muted transition hover:bg-white/5"
               >
                 Отмена
               </button>

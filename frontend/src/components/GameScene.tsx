@@ -16,6 +16,7 @@ import { useGeneralChatEffects } from '@/hooks/useGeneralChatEffects';
 import { cardRevealLabel } from '@/utils/cardLabel';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import { useGameStore } from '@/store/gameStore';
+import { useOutpostMovementStore } from '@/store/outpostMovementStore';
 import type { ChatMessage, GamePhase, MyProfile, Player, TypingIndicator } from '@/types/game';
 
 interface GameSceneProps {
@@ -198,8 +199,19 @@ export function GameScene({
       if (!canOpenPrivateChat(playerId)) return;
       setActionMenuPlayerId(playerId);
       setActionMenuAnchor(anchor);
+
+      if (!gatheredAtTable && myProfile && !seatedPlayerIds.includes(myProfile.id)) {
+        const targetFeet = useOutpostMovementStore.getState().getFeet(playerId);
+        if (targetFeet) {
+          useOutpostMovementStore.getState().setTarget(
+            myProfile.id,
+            targetFeet.x,
+            targetFeet.y,
+          );
+        }
+      }
     },
-    [canOpenPrivateChat],
+    [canOpenPrivateChat, gatheredAtTable, myProfile, seatedPlayerIds],
   );
 
   const handleCloseActionMenu = useCallback(() => {
@@ -304,11 +316,9 @@ export function GameScene({
         onDone={handleMeetingAnnounceDone}
       />
 
-      {gatheredAtTable &&
-        !privateChatPlayerId &&
-        !(generalChatOpen && gameState !== 'RECESS') && (
-          <BrigGrid brigCharacterIds={brigCharacterIds} players={players} />
-        )}
+      {!(generalChatOpen || privateChatPlayerId) && (
+        <BrigGrid brigCharacterIds={brigCharacterIds} players={players} />
+      )}
 
       <CharacterActionMenu
         open={actionMenuPlayer != null && actionMenuAnchor != null}

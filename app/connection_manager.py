@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from typing import Any
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
+
+from app.redis_state import redis_store
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +61,7 @@ class ConnectionManager:
             return
         await ws.send_json(message)
 
-    async def broadcast(
+    async def _broadcast_local(
         self,
         room_id: str,
         message: dict[str, Any],
@@ -80,5 +84,42 @@ class ConnectionManager:
         for cid in dead:
             self.disconnect(room_id, cid)
 
+    async def broadcast(
+        self,
+        room_id: str,
+        message: dict[str, Any],
+        *,
+        exclude: str | None = None,
+    ) -> None:
+        payload = {
+            "room_id": room_id,
+            "message": message,
+            "exclude": exclude,
+        }
+        await redis_store.redis.publish(f"room_broadcast:{room_id}", json.dumps(payload))
+
+    async def start_pubsub(self) -> asyncio.Task[None]:
+        async def _listen() -> None:
+            pubsub = redis_store.redis.pubsub()
+            await pubsub.psubscribe("room_broadcast:*")
+            try:
+                async for msg in pubsub.listen():
+                    if msg["type"] == "pmessage":
+                        try:
+                            data = json.loads(msg["data"])
+                            room_id = data.get("room_id")
+                            message = data.get("message")
+                            exclude = data.get("exclude")
+                            if room_id and message:
+                                await self._broadcast_local(room_id, message, exclude=exclude)
+                        except Exception:
+                            logger.exception("Failed to process pubsub message")
+            except asyncio.CancelledError:
+                pass
+            finally:
+                await pubsub.punsubscribe()
+                await pubsub.close()
+
+        return asyncio.create_task(_listen(), name="manager-pubsub")
 
 manager = ConnectionManager()

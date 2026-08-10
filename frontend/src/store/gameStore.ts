@@ -321,15 +321,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
         const senderName =
           player?.name ??
           (myProfile?.id === msg.client_id ? myProfile.name : msg.client_id);
+        if (msg.action === 'vote' && msg.payload?.target) {
+          get().bumpSuspicion(String(msg.payload.target), 15);
+        } else if (msg.action === 'move_to' && msg.client_id !== myProfile?.id) {
+          const payload = msg.payload as { x?: number; y?: number } | null;
+          if (payload && typeof payload.x === 'number' && typeof payload.y === 'number') {
+            useOutpostMovementStore.getState().setTarget(msg.client_id, payload.x, payload.y);
+          }
+          break; // Do not add chat message for movement
+        }
+        
         get().addChatMessage({
           sender: senderName,
           text: msg.text ?? '',
           timestamp: msg.ts,
           is_ai: msg.is_ai,
         });
-        if (msg.action === 'vote' && msg.payload?.target) {
-          get().bumpSuspicion(String(msg.payload.target), 15);
-        }
         break;
       }
       case 'player_joined':

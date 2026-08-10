@@ -8,12 +8,13 @@ import { FloorClickMarker } from '@/components/FloorClickMarker';
 import { StandingCharacterSprite } from '@/components/StandingCharacterSprite';
 import { ASSETS } from '@/config/assets';
 import { CHARACTERS } from '@/data/characters';
+import { useWasdMovement } from '@/hooks/useWasdMovement';
+import { useWebSocket } from '@/providers/WebSocketProvider';
 import { useOutpostMovementStore } from '@/store/outpostMovementStore';
 import type { Player } from '@/types/game';
 import {
   clampPlayerClick,
   isWalkableOutpostPoint,
-  randomWalkableWanderPoint,
 } from '@/utils/outpostCollision';
 import {
   getOutpostSpot,
@@ -24,6 +25,7 @@ import {
   seatLayoutToScenePos,
   seatZIndex,
   tableZIndex,
+  depthZ,
   type SeatLayout,
 } from '@/utils/seatPositions';
 import { playersBySeat } from '@/utils/scenePlayers';
@@ -46,9 +48,7 @@ interface RoundTableProps {
   privateChatAtSeats?: boolean;
 }
 
-function depthZ(sceneY: number, tieBreak = 0): number {
-  return Math.round(sceneY * 10) + tieBreak * 0.01;
-}
+
 
 export function RoundTable({
   players,
@@ -65,9 +65,9 @@ export function RoundTable({
   privateChatAtSeats = false,
 }: RoundTableProps) {
   const playerBySeat = playersBySeat(players);
-  const { table } = SCENE_LAYOUT;
   const showChibi = !gatheredAtTable && !PREVIEW_EMPTY_SEATS;
   const showSeated = gatheredAtTable && !PREVIEW_OUTPOST_STANDING;
+  const { send } = useWebSocket();
 
   const positions = useOutpostMovementStore((s) => s.positions);
   const initFromPlayers = useOutpostMovementStore((s) => s.initFromPlayers);
@@ -117,63 +117,31 @@ export function RoundTable({
     sanitizeAllPositions,
   ]);
 
-  const aiKey = useMemo(
-    () =>
-      players
-        .filter((p) => p.is_ai && p.is_alive)
-        .map((p) => p.id)
-        .sort()
-        .join(','),
-    [players],
-  );
-
-  // AI wander on outpost — slow + skip if still walking
-  useEffect(() => {
-    if (gatheredAtTable || !showChibi || !aiKey) return;
-
-    const timers: number[] = [];
-    const aiIds = aiKey.split(',').filter(Boolean);
-
-    for (const botId of aiIds) {
-      const schedule = () => {
-        const delay = 12000 + Math.random() * 28000;
-        const id = window.setTimeout(() => {
-          if (useOutpostMovementStore.getState().isMoving(botId)) {
-            schedule();
-            return;
-          }
-          // ~35% idle beat
-          if (Math.random() < 0.35) {
-            schedule();
-            return;
-          }
-          const point = randomWalkableWanderPoint();
-          setTarget(botId, point.x, point.y);
-          schedule();
-        }, delay);
-        timers.push(id);
-      };
-      const first = window.setTimeout(
-        () => {
-          if (!useOutpostMovementStore.getState().isMoving(botId) && Math.random() >= 0.35) {
-            const point = randomWalkableWanderPoint();
-            setTarget(botId, point.x, point.y);
-          }
-          schedule();
-        },
-        8000 + Math.random() * 12000,
-      );
-      timers.push(first);
-    }
-
-    return () => {
-      for (const id of timers) window.clearTimeout(id);
-    };
-  }, [gatheredAtTable, showChibi, aiKey, setTarget]);
+  // AI wander on outpost — DELETED (now driven by backend sync)
 
   const handleMarkerDone = useCallback((id: number) => {
     setClickMarker((prev) => (prev?.id === id ? null : prev));
   }, []);
+
+  const clearClickMarker = useCallback(() => {
+    setClickMarker(null);
+  }, []);
+
+  const sendWasdMove = useCallback(
+    (x: number, y: number) => {
+      send({ action: 'move_to', payload: { x, y } });
+    },
+    [send],
+  );
+
+  useWasdMovement({
+    enabled: !gatheredAtTable,
+    selfId,
+    selfIsSeated,
+    onStandSelf,
+    onClearClickMarker: clearClickMarker,
+    sendMove: sendWasdMove,
+  });
 
   const handleFloorCursorMove = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
@@ -205,6 +173,7 @@ export function RoundTable({
         const id = ++markerSeq.current;
         setClickMarker({ x: clamped.x, y: clamped.y, id });
         setTarget(selfId, clamped.x, clamped.y);
+        send({ action: 'move_to', payload: { x: clamped.x, y: clamped.y } });
         return;
       }
 
@@ -212,6 +181,7 @@ export function RoundTable({
       const id = ++markerSeq.current;
       setClickMarker({ x: clamped.x, y: clamped.y, id });
       setTarget(selfId, clamped.x, clamped.y);
+      send({ action: 'move_to', payload: { x: clamped.x, y: clamped.y } });
     },
     [
       gatheredAtTable,
@@ -220,6 +190,7 @@ export function RoundTable({
       setTarget,
       clearPendingSit,
       onStandSelf,
+      send,
     ],
   );
 
@@ -283,12 +254,14 @@ export function RoundTable({
     [advancePath, clearPendingSit, onSitSelf],
   );
 
-  const seatEntries = SCENE_LAYOUT.seats.map((layout, index) => ({
-    seatNumber: index + 1,
-    layout,
-    player: playerBySeat.get(index),
-    zIndex: seatZIndex(layout),
-  }));
+  const seatEntries = Object.values(SCENE_LAYOUT.seats).map((layout, index) => {
+    return {
+      seatNumber: index + 1,
+      layout,
+      player: playerBySeat.get(index),
+      zIndex: seatZIndex(layout),
+    };
+  });
 
   const backSeats = seatEntries.filter((s) => s.layout.behindTable);
   const frontSeats = seatEntries.filter((s) => !s.layout.behindTable);
@@ -360,20 +333,15 @@ export function RoundTable({
     );
   };
 
-  const tableScene = seatLayoutToScenePos({
-    x: table.x + (table.offsetX ?? 0),
-    y: table.y + (table.offsetY ?? 0),
-    scale: 1,
-  });
-
   const tableBlock = (
     <div
-      className="absolute -translate-x-1/2 -translate-y-1/2"
+      className="absolute"
       style={{
-        left: `${table.x + (table.offsetX ?? 0)}%`,
-        top: `${table.y + (table.offsetY ?? 0)}%`,
-        width: `${table.widthPercent}%`,
+        left: `${SCENE_LAYOUT.table.x + (SCENE_LAYOUT.table.offsetX ?? 0)}%`,
+        top: `${SCENE_LAYOUT.table.y + (SCENE_LAYOUT.table.offsetY ?? 0)}%`,
+        width: `${SCENE_LAYOUT.table.widthPercent}%`,
         zIndex: tableZIndex(),
+        transform: 'translate(-50%, -50%)',
       }}
     >
       <img
@@ -426,9 +394,6 @@ export function RoundTable({
       })
     : [];
 
-  const chibisBehind = standingEntries.filter((e) => e.layout.y < tableScene.y);
-  const chibisFront = standingEntries.filter((e) => e.layout.y >= tableScene.y);
-
   const renderStanding = (
     entries: typeof standingEntries,
     layerKey: string,
@@ -478,40 +443,35 @@ export function RoundTable({
         />
       )}
 
-      {/* Behind table */}
-      {showChibi && (
-        <div className="pointer-events-none absolute inset-0 z-[3]">
-          <AnimatePresence>{renderStanding(chibisBehind, 'behind')}</AnimatePresence>
-        </div>
-      )}
-
-      {/* Table + chairs — standing layer above is pointer-events-none except sprites */}
-      {(showChibi || showSeated) && (
-        <div
-          className="pointer-events-none absolute z-[4] -translate-x-1/2 -translate-y-1/2"
-          style={{
-            left: `${SCENE_GROUP.x}%`,
-            top: `${SCENE_GROUP.y}%`,
-            width: `${SCENE_GROUP.widthPercent}%`,
-            aspectRatio: '1 / 1',
-          }}
-        >
-          {backSeats.map(({ seatNumber, layout, player, zIndex }) =>
-            renderChair(seatNumber, layout, player, zIndex),
-          )}
-          {tableBlock}
-          {frontSeats.map(({ seatNumber, layout, player, zIndex }) =>
-            renderChair(seatNumber, layout, player, zIndex),
-          )}
-        </div>
-      )}
-
-      {/* In front of table — closer to camera than furniture */}
-      {showChibi && (
-        <div className="pointer-events-none absolute inset-0 z-[5]">
-          <AnimatePresence>{renderStanding(chibisFront, 'front')}</AnimatePresence>
-        </div>
-      )}
+      {/* ALL elements (chibis, table, chairs) in ONE stacking context for dynamic zIndex sorting */}
+      <div className="pointer-events-none absolute inset-0 z-[3]">
+        {showChibi && (
+          <AnimatePresence>{renderStanding(standingEntries, 'chibis')}</AnimatePresence>
+        )}
+        
+        {(showChibi || showSeated) && (
+          <div
+            className="pointer-events-none absolute"
+            style={{
+              left: `${SCENE_GROUP.x}%`,
+              top: `${SCENE_GROUP.y}%`,
+              width: `${SCENE_GROUP.widthPercent}%`,
+              aspectRatio: '1 / 1',
+              marginLeft: `-${SCENE_GROUP.widthPercent / 2}%`,
+              marginTop: `-${SCENE_GROUP.widthPercent / 2}%`,
+              // NO transform, NO z-index to avoid creating a new stacking context!
+            }}
+          >
+            {backSeats.map(({ seatNumber, layout, player, zIndex }) =>
+              renderChair(seatNumber, layout, player, zIndex),
+            )}
+            {tableBlock}
+            {frontSeats.map(({ seatNumber, layout, player, zIndex }) =>
+              renderChair(seatNumber, layout, player, zIndex),
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

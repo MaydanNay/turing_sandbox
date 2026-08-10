@@ -3,6 +3,7 @@ import {
   OUTPOST_WANDER_BOUNDS,
   SCENE_GROUP,
   SCENE_LAYOUT,
+  getOutpostSpot,
   seatLayoutToScenePos,
 } from '@/utils/seatPositions';
 import {
@@ -256,17 +257,20 @@ function resolveOutsideObstacles(p: Point, obstacles: CircleObstacle[]): Point {
  */
 export function standUpSpawnForSeat(seatNumber: number): Point {
   const seat = SCENE_LAYOUT.seats[seatNumber - 1];
-  const blob = getFurnitureBlob();
   if (!seat) {
-    return ensureOutsideFurniture({ x: blob.cx + blob.r + 2, y: blob.cy });
+    const spot = getOutpostSpot(seatNumber);
+    return { x: spot.x, y: spot.y };
   }
   const seatPos = seatLayoutToScenePos(seat);
-  const dx = seatPos.x - blob.cx;
-  const dy = seatPos.y - blob.cy;
+  const center = tableCenterScene();
+  const dx = seatPos.x - center.x;
+  const dy = seatPos.y - center.y;
   const len = Math.hypot(dx, dy) || 1;
-  return ensureOutsideFurniture({
-    x: blob.cx + (dx / len) * (blob.r + 1.2),
-    y: blob.cy + (dy / len) * (blob.r + 1.2),
+  
+  // Push outwards from the chair's center by 4% of scene width
+  return clampToWalkable({
+    x: seatPos.x + (dx / len) * 4,
+    y: seatPos.y + (dy / len) * 4,
   });
 }
 
@@ -275,11 +279,29 @@ export function standUpSpawnForSeat(seatNumber: number): Point {
  * Empty on purpose — walkability is owned by OUTPOST_WALK_POLYGONS only
  * (edit via ?walkEdit=1). Table/chairs are not circle-blocked.
  */
-export function getOutpostObstacles(_opts?: {
+export function getOutpostObstacles(opts?: {
   /** kept for call-site compat (sit path) */
   passThroughSeat?: number;
+  dynamicObstacles?: CircleObstacle[];
 }): CircleObstacle[] {
-  return [];
+  const obstacles: CircleObstacle[] = [...(opts?.dynamicObstacles ?? [])];
+
+  // Add all chairs as pathfinding obstacles
+  Object.values(SCENE_LAYOUT.seats).forEach((seatLayout, index) => {
+    const seatNumber = index + 1;
+    // Do not treat the chair we are explicitly trying to sit on as an obstacle
+    if (opts?.passThroughSeat === seatNumber) return;
+
+    const pos = seatLayoutToScenePos(seatLayout);
+    obstacles.push({
+      id: `seat-${seatNumber}`,
+      cx: pos.x,
+      cy: pos.y,
+      r: SEAT_RADIUS_SCENE * seatLayout.scale,
+    });
+  });
+
+  return obstacles;
 }
 
 /**
@@ -396,7 +418,7 @@ function blockDetourNodes(): Point[] {
 export function findOutpostPath(
   from: Point,
   to: Point,
-  opts?: { passThroughSeat?: number },
+  opts?: { passThroughSeat?: number; dynamicObstacles?: CircleObstacle[] },
 ): Point[] {
   const obstacles = getOutpostObstacles(opts);
   let start = pushOutOfObstacles(from, obstacles);
@@ -504,15 +526,26 @@ export function isWalkableOutpostPoint(p: Point, _opts?: { passThroughSeat?: num
   return pointInWalkable(p);
 }
 
-export function randomWalkableWanderPoint(maxTries = 40): Point {
+export function randomWalkableWanderPoint(
+  maxTries = 40,
+  near?: { center: Point; radius: number },
+): Point {
   const { minX, maxX, minY, maxY } = OUTPOST_WANDER_BOUNDS;
   for (let i = 0; i < maxTries; i++) {
-    const p = {
-      x: minX + Math.random() * (maxX - minX),
-      y: minY + Math.random() * (maxY - minY),
-    };
+    let px, py;
+    if (near) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.random() * near.radius;
+      px = near.center.x + Math.cos(angle) * dist;
+      py = near.center.y + Math.sin(angle) * dist;
+    } else {
+      px = minX + Math.random() * (maxX - minX);
+      py = minY + Math.random() * (maxY - minY);
+    }
+    const p = { x: px, y: py };
     if (pointInWalkable(p)) return p;
   }
+  if (near && pointInWalkable(near.center)) return near.center;
   return clampToWanderBounds({
     x: (minX + maxX) / 2,
     y: (minY + maxY) / 2,

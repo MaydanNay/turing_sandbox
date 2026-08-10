@@ -24,6 +24,16 @@ TABLE_SPEAK_DEBOUNCE_MAX_SECONDS = 15
 # room_id -> set of bot client_ids we spawned
 _active_bots: dict[str, set[str]] = {}
 _bot_tasks: dict[str, asyncio.Task] = {}
+WORKER_ID = uuid.uuid4().hex
+
+async def _acquire_room_leadership(room_id: str) -> bool:
+    """Ensure only one worker manages bots for a room."""
+    key = f"bot_leader:{room_id}"
+    current = await redis_store.redis.get(key)
+    if current is None or current.decode() == WORKER_ID:
+        await redis_store.redis.set(key, WORKER_ID, ex=15)
+        return True
+    return False
 
 
 def _bot_client_id() -> str:
@@ -55,6 +65,13 @@ async def ensure_mock_agents(room_id: str) -> None:
     if existing is None or existing.done():
         _bot_tasks[task_key] = asyncio.create_task(
             _room_bot_loop(room_id), name=task_key
+        )
+        
+    movement_key = f"movement:{room_id}"
+    existing_movement = _bot_tasks.get(movement_key)
+    if existing_movement is None or existing_movement.done():
+        _bot_tasks[movement_key] = asyncio.create_task(
+            _run_ai_movement(room_id), name=movement_key
         )
 
 
@@ -120,11 +137,12 @@ async def _room_bot_loop(room_id: str) -> None:
     try:
         while True:
             try:
-                await asyncio.wait_for(queue.get(), timeout=120.0)
+                await asyncio.wait_for(queue.get(), timeout=5.0)
             except asyncio.TimeoutError:
-                state = await redis_store.get_room(room_id)
-                if state is None or state.phase == Phase.finished:
-                    break
+                pass
+
+            is_leader = await _acquire_room_leadership(room_id)
+            if not is_leader:
                 continue
 
             state = await redis_store.get_room(room_id)
@@ -232,15 +250,91 @@ async def _bot_speak(room_id: str, bot_id: str, text: str) -> None:
     logger.info("Seat bot spoke room=%s bot=%s via helixa", room_id, bot_id)
 
 
+async def _run_ai_movement(room_id: str) -> None:
+    try:
+        # Define corners for pacing
+        CORNERS = [
+            (10.0, 30.0),  # Top Left
+            (85.0, 30.0),  # Top Right
+            (10.0, 100.0), # Bottom Left
+            (85.0, 100.0), # Bottom Right
+        ]
+        
+        while True:
+            delay_s = random.uniform(5.0, 15.0)
+            await asyncio.sleep(delay_s)
+            
+            is_leader = await _acquire_room_leadership(room_id)
+            if not is_leader:
+                continue
+
+            state = await redis_store.get_room(room_id)
+            if state is None or state.phase == Phase.finished:
+                break
+                
+            if state.phase not in (Phase.init, Phase.recess):
+                continue
+                
+            bots = [p for p in state.players.values() if p.is_ai and p.connected]
+            if not bots:
+                continue
+                
+            bot = random.choice(bots)
+            
+            # Calculate suspicion from recent events
+            events = await redis_store.list_events(room_id, limit=200)
+            suspicion = 0
+            for ev in events:
+                if ev.get("action_type") == "vote":
+                    payload = ev.get("raw_payload", {}).get("payload", {})
+                    if payload and payload.get("target") == bot.id:
+                        suspicion += 15
+                elif ev.get("action_type") == "suspicion_up":
+                    payload = ev.get("raw_payload", {})
+                    if payload.get("target") == bot.id:
+                        suspicion += 20
+            
+            if suspicion >= 30:
+                # Highly suspicious: Pace in a random corner
+                base_x, base_y = random.choice(CORNERS)
+                target_x = base_x + random.uniform(-10.0, 10.0)
+                target_y = base_y + random.uniform(-10.0, 10.0)
+            else:
+                # Calm: Cluster in the center (40%) or wander randomly (60%)
+                if random.random() < 0.40:
+                    # Central gathering area
+                    target_x = random.uniform(30.0, 70.0)
+                    target_y = random.uniform(40.0, 80.0)
+                else:
+                    # Random exploration
+                    target_x = random.uniform(5.0, 90.0)
+                    target_y = random.uniform(25.0, 105.0)
+            
+            event = {
+                "type": "message",
+                "room_id": room_id,
+                "client_id": bot.id,
+                "action": "move_to",
+                "is_ai": True,
+                "payload": {"x": target_x, "y": target_y},
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            await manager.broadcast(room_id, event)
+    except asyncio.CancelledError:
+        pass
+    logger.info("AI movement loop stopped room=%s", room_id)
+
+
 async def stop_room_bots(room_id: str) -> None:
-    task_key = f"listener:{room_id}"
-    task = _bot_tasks.pop(task_key, None)
-    if task and not task.done():
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    for prefix in ["listener", "movement"]:
+        task_key = f"{prefix}:{room_id}"
+        task = _bot_tasks.pop(task_key, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     _active_bots.pop(room_id, None)
 
 

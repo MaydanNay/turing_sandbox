@@ -163,7 +163,7 @@ export function GameHud({
   const hasVoted = Boolean(voterId && votes[voterId]);
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-10">
+    <div className="pointer-events-none absolute inset-0 z-[10001]">
       <div
         className="pointer-events-none absolute inset-0 bg-black/10 backdrop-blur-[24px]"
         aria-hidden

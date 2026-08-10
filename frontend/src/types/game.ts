@@ -57,7 +57,7 @@ export interface MyProfile {
 
 /** Client → server WS payload */
 export interface WsOutboundAction {
-  action: 'chat' | 'pitch' | 'vote' | 'phase' | 'private_chat_send' | 'reveal_card';
+  action: 'chat' | 'pitch' | 'vote' | 'phase' | 'private_chat_send' | 'reveal_card' | 'move_to' | 'ping';
   type?: 'private_chat_send' | 'reveal_card';
   text?: string;
   payload?: Record<string, unknown>;
@@ -68,11 +68,12 @@ export interface WsOutboundAction {
 
 /** Spec-style inbound message (future / extended protocol) */
 export interface WsClientMessage {
-  action: 'sync_state' | 'chat' | 'suspicion_up' | 'typing';
+  action: 'sync_state' | 'chat' | 'suspicion_up' | 'typing' | 'move_to';
   data?: Record<string, unknown>;
   sender?: string;
   text?: string;
   target?: string;
+  payload?: Record<string, unknown>;
 }
 
 /** Actual backend outbound message shapes */
@@ -123,7 +124,7 @@ export interface BackendChatMessage {
   type: 'message';
   room_id: string;
   client_id: string;
-  action: 'chat' | 'pitch' | 'vote';
+  action: 'chat' | 'pitch' | 'vote' | 'move_to';
   text: string | null;
   is_ai: boolean;
   payload: Record<string, unknown> | null;

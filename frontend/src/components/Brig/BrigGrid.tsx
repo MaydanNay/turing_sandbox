@@ -63,6 +63,7 @@ interface BrigGridProps {
 /** Сетка карцера — portal + явное WoW-вдавливание */
 export function BrigGrid({ brigCharacterIds, players, onOpen }: BrigGridProps) {
   const [pressed, setPressed] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   const slots = Array.from({ length: BRIG_CAPACITY }, (_, index) => {
     const characterId = brigCharacterIds[index] ?? null;
@@ -105,6 +106,7 @@ export function BrigGrid({ brigCharacterIds, players, onOpen }: BrigGridProps) {
         aria-label={`Карцер ${occupied} из ${BRIG_CAPACITY}`}
         onClick={(event) => {
           event.stopPropagation();
+          setCollapsed(!collapsed);
           onOpen?.();
         }}
         onMouseDown={(event) => {
@@ -118,20 +120,27 @@ export function BrigGrid({ brigCharacterIds, players, onOpen }: BrigGridProps) {
         }}
         onMouseLeave={release}
         onBlur={release}
-        className="brig-wow-btn select-none rounded-xl px-3 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60"
+        className={`brig-wow-btn select-none rounded-xl px-4 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60 ${collapsed ? 'w-48' : ''}`}
       >
-        <p className="mb-2 text-center font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-red-300">
-          Карцер · {occupied}/{BRIG_CAPACITY}
-        </p>
-        <div className="flex gap-2">
-          {slots.map((slot, index) => (
-            <BrigSlot
-              key={slot.characterId ?? `empty-${index}`}
-              characterId={slot.characterId}
-              name={slot.name}
-            />
-          ))}
+        <div className={`flex items-center justify-between ${collapsed ? '' : 'mb-3'}`}>
+          <p className="text-center font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-red-300">
+            Карцер · {occupied}/{BRIG_CAPACITY}
+          </p>
+          <span className="ml-4 flex h-4 w-4 items-center justify-center rounded-sm text-[10px] text-red-400">
+            {collapsed ? '▼' : '▲'}
+          </span>
         </div>
+        {!collapsed && (
+          <div className="flex gap-2">
+            {slots.map((slot, index) => (
+              <BrigSlot
+                key={slot.characterId ?? `empty-${index}`}
+                characterId={slot.characterId}
+                name={slot.name}
+              />
+            ))}
+          </div>
+        )}
       </button>
     </div>
   );

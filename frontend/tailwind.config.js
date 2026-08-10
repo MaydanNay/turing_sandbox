@@ -29,6 +29,7 @@ export default {
       animation: {
         glitch: 'glitch 0.3s steps(2) infinite',
         scanline: 'scanline 8s linear infinite',
+        'self-marker': 'self-marker-bob 1.6s ease-in-out infinite',
       },
       keyframes: {
         glitch: {
@@ -40,6 +41,10 @@ export default {
         scanline: {
           '0%': { transform: 'translateY(-100%)' },
           '100%': { transform: 'translateY(100vh)' },
+        },
+        'self-marker-bob': {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(3px)' },
         },
       },
     },

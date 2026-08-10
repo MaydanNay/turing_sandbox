@@ -164,7 +164,7 @@ export function PrivateChatOverlay({
     <AnimatePresence>
       {player && (
         <motion.div
-          className="fixed inset-0 z-50 overflow-hidden"
+          className="fixed inset-0 z-[10002] overflow-hidden"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
