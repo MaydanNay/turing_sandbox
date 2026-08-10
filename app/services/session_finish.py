@@ -62,13 +62,16 @@ def _derive_winning_team(
     brig_set: set[str],
 ) -> str:
     """
-    Prefer faction ground truth: all SYNTHETIC in brig → HUMAN (even if client sent ABORTED).
-    Early leave without that → ABORTED. Resolve / conscious end without full brig → SYNTHETICS.
+    Prefer explicit convoy audit (HUMAN | SYNTHETICS from finalize_match).
+    Fallback: all SYNTHETIC in brig → HUMAN. Early leave → ABORTED.
     """
+    client = (winning_team or "").strip().upper()
+    if client in ("HUMAN", "SYNTHETICS"):
+        return client
+
     if _all_synthetics_in_brig(state, brig_set):
         return "HUMAN"
 
-    client = (winning_team or "").strip().upper()
     early_leave = client in ("", "ABORTED") and phase not in (
         Phase.resolve,
         Phase.finished,
@@ -79,13 +82,11 @@ def _derive_winning_team(
             return "HUMAN"
         return "ABORTED"
 
-    if client == "HUMAN":
-        return "HUMAN"
     if client == "ABORTED":
         return "ABORTED"
 
-    # Resolve / DRAW / explicit end without all synthetics locked
-    if client in ("DRAW", "SYNTHETICS") or phase in (Phase.resolve, Phase.finished):
+    # Resolve / DRAW / explicit end without convoy audit
+    if client in ("DRAW",) or phase in (Phase.resolve, Phase.finished):
         return "SYNTHETICS"
 
     if client:
@@ -194,6 +195,19 @@ async def finish_session(
         if session is None:
             session = GameSession(id=sid, status=SessionStatus.active)
             db.add(session)
+
+        # Already finished (retry after Redis cleanup failure) — do not duplicate events
+        if session.status == SessionStatus.finished:
+            await db.commit()
+            await stop_room_bots(room_id)
+            await redis_store.delete_room(room_id)
+            logger.info(
+                "Session finish retry cleanup session=%s room=%s team=%s",
+                sid,
+                room_id,
+                outcome_team,
+            )
+            return sid, 0, outcome_team
 
         session.status = SessionStatus.finished
         session.winner_id = winner_id

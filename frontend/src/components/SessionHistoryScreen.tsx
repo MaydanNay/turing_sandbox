@@ -8,6 +8,7 @@ import {
   type SessionSummary,
 } from '@/api/sessions';
 import { ASSETS } from '@/config/assets';
+import { useT } from '@/i18n';
 
 interface SessionHistoryScreenProps {
   onBack: () => void;
@@ -37,6 +38,7 @@ function eventPreview(ev: SessionEventItem): string {
 }
 
 export function SessionHistoryScreen({ onBack }: SessionHistoryScreenProps) {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -116,7 +118,7 @@ export function SessionHistoryScreen({ onBack }: SessionHistoryScreenProps) {
               Turing Station
             </p>
             <h1 className="mt-1 font-display text-xl font-semibold tracking-wide text-white sm:text-2xl">
-              История матчей
+              {t('history.title')}
             </h1>
           </div>
           <button
@@ -125,7 +127,7 @@ export function SessionHistoryScreen({ onBack }: SessionHistoryScreenProps) {
             className="inline-flex items-center gap-2 rounded border border-bunker-border/80 bg-black/60 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-bunker-muted backdrop-blur-sm transition hover:border-bunker-neon/50 hover:text-bunker-neon"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            В меню
+            {t('history.back')}
           </button>
         </header>
 

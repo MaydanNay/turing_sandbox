@@ -32,12 +32,16 @@ interface GameChatPanelProps {
   gatheredAtTable?: boolean;
   handCards?: PlayerHandCard[];
   onRevealCard?: (cardId: string) => void;
+  revealCardType?: string | null;
   isVotingMode?: boolean;
   hasVoted?: boolean;
   onVoteToBrig?: (targetCharacterId: string) => void;
   mockMode?: boolean;
   onMockStartVoting?: () => void;
   forceVoting?: boolean;
+  phaseDeadlineTs?: number | null;
+  phaseDurationSec?: number | null;
+  revealDeadlineTs?: number | null;
   onClose?: () => void;
   showCloseButton?: boolean;
 }
@@ -139,6 +143,10 @@ function PlayerSidebar({
   rosterPlayers,
   onInspect,
   forceVoting = false,
+  phaseDeadlineTs = null,
+  phaseDurationSec = null,
+  revealDeadlineTs = null,
+  revealCardType = null,
 }: {
   players: HudPlayerSlot[];
   revealPlayer?: HudPlayerSlot | null;
@@ -149,6 +157,10 @@ function PlayerSidebar({
   rosterPlayers?: Player[];
   onInspect: (characterId: string) => void;
   forceVoting?: boolean;
+  phaseDeadlineTs?: number | null;
+  phaseDurationSec?: number | null;
+  revealDeadlineTs?: number | null;
+  revealCardType?: string | null;
 }) {
   const handleInspect = (characterId: string) => {
     onInspect(inspectCharacterId === characterId ? '' : characterId);
@@ -162,6 +174,10 @@ function PlayerSidebar({
         isMyRevealTurn={isMyRevealTurn}
         gatheredAtTable={gatheredAtTable}
         forceVoting={forceVoting}
+        phaseDeadlineTs={phaseDeadlineTs}
+        phaseDurationSec={phaseDurationSec}
+        revealDeadlineTs={revealDeadlineTs}
+        revealCardType={revealCardType}
       />
 
       <AnimatePresence mode="wait">
@@ -331,12 +347,16 @@ export function GameChatPanel({
   gatheredAtTable = true,
   handCards = [],
   onRevealCard,
+  revealCardType = null,
   isVotingMode = false,
   hasVoted = false,
   onVoteToBrig,
   mockMode = false,
   onMockStartVoting,
   forceVoting = false,
+  phaseDeadlineTs = null,
+  phaseDurationSec = null,
+  revealDeadlineTs = null,
   onClose,
   showCloseButton: _showCloseButton = false,
 }: GameChatPanelProps) {
@@ -380,6 +400,10 @@ export function GameChatPanel({
         rosterPlayers={rosterPlayers}
         onInspect={handleInspect}
         forceVoting={forceVoting}
+        phaseDeadlineTs={phaseDeadlineTs}
+        phaseDurationSec={phaseDurationSec}
+        revealDeadlineTs={revealDeadlineTs}
+        revealCardType={revealCardType}
       />
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -441,7 +465,11 @@ export function GameChatPanel({
         )}
 
         {isMyRevealTurn && onRevealCard && !isVotingMode && (
-          <RevealTurnPanel cards={handCards} onRevealCard={onRevealCard} />
+          <RevealTurnPanel
+            cards={handCards}
+            onRevealCard={onRevealCard}
+            requiredType={revealCardType}
+          />
         )}
 
         {isVotingMode && rosterPlayers && onVoteToBrig && (

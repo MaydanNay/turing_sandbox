@@ -32,6 +32,7 @@ class PlayerInfo(BaseModel):
     faction: Faction | None = None  # HUMAN | SYNTHETIC — system-only
     is_ai: bool = False
     connected: bool = True
+    is_alive: bool = True
 
 
 class RoomState(BaseModel):
@@ -39,9 +40,57 @@ class RoomState(BaseModel):
     session_id: str | None = None
     phase: Phase = Phase.init
     phase_deadline_ts: float | None = None
+    # Minutes until convoy arrives (7 | 15 | 30). None → use global PHASE_DURATION_SCALE
+    match_duration_minutes: int | None = None
+    # Unix ts when matchmaking ends and bots fill empty seats (Init only)
+    matchmaking_deadline_ts: float | None = None
+    # Private lobby: invite friends by code; host starts (no public matchmaking)
+    is_private: bool = False
+    invite_code: str | None = None
+    host_client_id: str | None = None
     players: dict[str, PlayerInfo] = Field(default_factory=dict)
     roles_assigned: bool = False
     hands_dealt: bool = False
+    # Eviction order (character_id)
+    brig_character_ids: list[str] = Field(default_factory=list)
+    # client_id → character_id
+    votes: dict[str, str] = Field(default_factory=dict)
+    vote_open: bool = False
+    # Reveal turn queue (client_ids)
+    reveal_queue: list[str] = Field(default_factory=list)
+    reveal_index: int = 0
+    reveal_deadline_ts: float | None = None
+    reveal_card_type: str | None = None
+
+
+MATCH_DURATION_CHOICES = (7, 15, 30)
+
+
+class SessionCreateRequest(BaseModel):
+    match_duration_minutes: int = Field(
+        default=15,
+        description="Minutes until convoy: 7 (quick), 15 (standard), 30 (long)",
+    )
+    private: bool = Field(
+        default=False,
+        description="If true, create a private room with invite code (not public matchmaking)",
+    )
+
+
+class SessionJoinRequest(BaseModel):
+    invite_code: str = Field(min_length=4, max_length=12)
+
+
+class SessionCreateResponse(BaseModel):
+    session_id: UUID
+    room_id: str
+    status: str
+    ws_url: str
+    match_duration_minutes: int | None = None
+    invite_code: str | None = None
+    is_private: bool = False
+    # One-time lobby seat hold; pass as ?seat_token= on WS connect
+    seat_token: str | None = None
 
 
 def room_state_for_client(state: RoomState) -> dict[str, Any]:
@@ -70,13 +119,6 @@ class WsOutboundMessage(BaseModel):
     state: RoomState | None = None
     payload: dict[str, Any] | None = None
     ts: datetime = Field(default_factory=datetime.utcnow)
-
-
-class SessionCreateResponse(BaseModel):
-    session_id: UUID
-    room_id: str
-    status: str
-    ws_url: str
 
 
 class SessionFinishRequest(BaseModel):

@@ -41,17 +41,27 @@ def _bot_client_id() -> str:
 
 
 async def ensure_mock_agents(room_id: str) -> None:
-    """Fill room up to ROOM_CAPACITY with AI seat bots when humans are scarce."""
+    """Fill room up to ROOM_CAPACITY with AI seat bots, then assign roles and start."""
     state = await redis_store.ensure_room(room_id)
-    humans = [p for p in state.players.values() if not p.is_ai and p.connected]
-    bots = [p for p in state.players.values() if p.is_ai]
-
-    needed = max(0, settings.room_capacity - len(humans) - len(bots))
-    if len(humans) >= settings.room_capacity:
+    if state.roles_assigned:
+        await _ensure_bot_loops(room_id)
         return
 
-    room_bots = _active_bots.setdefault(room_id, set())
+    # Drop abandoned humans so they don't consume character slots
+    drop = [cid for cid, p in state.players.items() if not p.is_ai and not p.is_alive]
+    if drop:
+        for cid in drop:
+            del state.players[cid]
+        await redis_store.save_room(state)
+        state = await redis_store.ensure_room(room_id)
 
+    humans = [
+        p for p in state.players.values() if not p.is_ai and p.is_alive and p.connected
+    ]
+    bots = [p for p in state.players.values() if p.is_ai]
+    needed = max(0, settings.room_capacity - len(humans) - len(bots))
+
+    room_bots = _active_bots.setdefault(room_id, set())
     for _ in range(needed):
         bot_id = _bot_client_id()
         await redis_store.upsert_player(room_id, bot_id, is_ai=True, connected=True)
@@ -59,14 +69,17 @@ async def ensure_mock_agents(room_id: str) -> None:
         logger.info("Seat bot joined room=%s bot=%s", room_id, bot_id)
 
     await redis_store.assign_roles(room_id)
+    await _ensure_bot_loops(room_id)
 
+
+async def _ensure_bot_loops(room_id: str) -> None:
     task_key = f"listener:{room_id}"
     existing = _bot_tasks.get(task_key)
     if existing is None or existing.done():
         _bot_tasks[task_key] = asyncio.create_task(
             _room_bot_loop(room_id), name=task_key
         )
-        
+
     movement_key = f"movement:{room_id}"
     existing_movement = _bot_tasks.get(movement_key)
     if existing_movement is None or existing_movement.done():

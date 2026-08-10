@@ -10,8 +10,10 @@ import {
   isRevealPhase,
 } from '@/data/gamePhaseConfig';
 import type { HudPlayerSlot } from '@/data/mockHud';
-import { usePhaseCountdown } from '@/hooks/usePhaseCountdown';
+import { useDeadlineCountdown, usePhaseCountdown } from '@/hooks/usePhaseCountdown';
 import type { GamePhase } from '@/types/game';
+import { revealTypeLabel } from '@/utils/cardArt';
+import type { CardType } from '@/types/card';
 
 const PINSTRIPE_BG = `#F5E6A8 repeating-linear-gradient(
   0deg,
@@ -91,6 +93,11 @@ export interface GameProcessPanelProps {
   isMyRevealTurn?: boolean;
   gatheredAtTable?: boolean;
   forceVoting?: boolean;
+  /** Server unix-seconds deadline; when set, HUD follows the server clock */
+  phaseDeadlineTs?: number | null;
+  phaseDurationSec?: number | null;
+  revealDeadlineTs?: number | null;
+  revealCardType?: string | null;
 }
 
 export function GameProcessPanel({
@@ -99,35 +106,51 @@ export function GameProcessPanel({
   isMyRevealTurn = false,
   gatheredAtTable = true,
   forceVoting = false,
+  phaseDeadlineTs = null,
+  phaseDurationSec = null,
+  revealDeadlineTs = null,
+  revealCardType = null,
 }: GameProcessPanelProps) {
   const meta = getPhaseMeta(phase);
   const revealCharacterId =
     revealPlayer && isRevealPhase(phase) ? revealPlayer.id : null;
 
-  const { resetKey, initialSeconds } = getPhaseCountdownConfig(
-    phase,
-    gatheredAtTable,
-    revealCharacterId,
-  );
+  const {
+    resetKey,
+    initialSeconds,
+    showReveal: revealTurnClock,
+  } = getPhaseCountdownConfig(phase, gatheredAtTable, revealCharacterId);
 
-  const remaining = usePhaseCountdown(initialSeconds, resetKey);
-  const voting = forceVoting || isInVoteWindow(phase, remaining);
+  const localRemaining = usePhaseCountdown(initialSeconds, resetKey);
+  const serverPhaseRemaining = useDeadlineCountdown(phaseDeadlineTs);
+  const serverRevealRemaining = useDeadlineCountdown(revealDeadlineTs);
+  const useRevealClock = revealTurnClock && revealDeadlineTs != null;
+  const useServerPhaseClock = phaseDeadlineTs != null && !useRevealClock;
+  const remaining = useRevealClock
+    ? serverRevealRemaining
+    : useServerPhaseClock
+      ? serverPhaseRemaining
+      : localRemaining;
+  const voting = forceVoting || isInVoteWindow(phase, remaining, phaseDurationSec);
 
   const showReveal =
     gatheredAtTable && revealPlayer != null && isRevealPhase(phase) && !voting;
 
   let title: string;
   let subtitle: string;
-  let showTimer = initialSeconds > 0;
+  let showTimer =
+    useRevealClock || useServerPhaseClock || initialSeconds > 0;
   let timerLabel: string | undefined;
   let urgentBelow = 10;
 
   if (!gatheredAtTable) {
-    if (phase === 'INIT') {
+    if (useServerPhaseClock || phase === 'INIT') {
       title = meta.title;
-      subtitle = meta.subtitle;
-      showTimer = meta.durationSeconds > 0;
-      timerLabel = 'Фаза 0';
+      subtitle =
+        phase === 'INIT' ? meta.subtitle : `${meta.subtitle} · подойдите к столу`;
+      showTimer = useServerPhaseClock || meta.durationSeconds > 0;
+      timerLabel =
+        meta.round != null && meta.round > 0 ? `Раунд ${meta.round}` : 'Фаза';
     } else {
       title = 'Сбор у аванпоста';
       subtitle = 'Ожидание за столом';
@@ -135,8 +158,14 @@ export function GameProcessPanel({
     }
   } else if (showReveal && revealPlayer) {
     title = revealPlayer.name;
-    subtitle = isMyRevealTurn ? 'Ваша очередь · откройте карту' : 'Очередь открывать карту';
+    const typeHint = revealCardType
+      ? revealTypeLabel(revealCardType as CardType)
+      : 'карту';
+    subtitle = isMyRevealTurn
+      ? `Обязательное вскрытие: ${typeHint}`
+      : `Очередь открывать ${typeHint}`;
     timerLabel = `Раунд ${meta.round ?? '—'}`;
+    urgentBelow = 8;
   } else if (voting) {
     title = 'Голосование';
     subtitle = 'Выберите, кого отправить в Карцер';
@@ -154,7 +183,9 @@ export function GameProcessPanel({
     }
   }
 
-  const hasLeadingIcon = Boolean((showReveal && revealPlayer) || voting || phase === 'VOTE');
+  const hasLeadingIcon = Boolean(
+    (showReveal && revealPlayer) || voting || phase === 'VOTE',
+  );
 
   return (
     <div
@@ -183,7 +214,9 @@ export function GameProcessPanel({
       )}
 
       {showTimer && remaining === 0 && (
-        <p className={`mt-2.5 text-[11px] text-neutral-500 ${hasLeadingIcon ? 'pl-[3.25rem]' : ''}`}>
+        <p
+          className={`mt-2.5 text-[11px] text-neutral-500 ${hasLeadingIcon ? 'pl-[3.25rem]' : ''}`}
+        >
           Время фазы истекло
         </p>
       )}

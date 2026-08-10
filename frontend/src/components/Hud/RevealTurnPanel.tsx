@@ -73,16 +73,24 @@ function RevealPickCard({
 interface RevealTurnPanelProps {
   cards: PlayerHandCard[];
   onRevealCard: (cardId: string) => void;
+  /** When set, only this card type can be picked (server reveal round) */
+  requiredType?: string | null;
 }
 
 /** Окно выбора карты — под лентой чата, над полем ввода */
-export function RevealTurnPanel({ cards, onRevealCard }: RevealTurnPanelProps) {
+export function RevealTurnPanel({
+  cards,
+  onRevealCard,
+  requiredType = null,
+}: RevealTurnPanelProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
 
-  const displayCards = cards.filter(
-    (c) => c.type !== 'secret_mission' && c.type !== 'character',
-  );
+  const displayCards = cards.filter((c) => {
+    if (c.type === 'secret_mission' || c.type === 'character') return false;
+    if (requiredType && c.type !== requiredType) return false;
+    return true;
+  });
 
   const selectedCard = useMemo(
     () => displayCards.find((card) => card.id === selectedCardId) ?? null,

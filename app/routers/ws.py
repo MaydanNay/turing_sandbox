@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from starlette.websockets import WebSocketState
 
@@ -16,10 +16,9 @@ from app.config import settings
 from app.connection_manager import manager
 from app.db import AsyncSessionLocal
 from app.event_bus import event_bus
-from app.mock_agent import ensure_mock_agents
 from app.models import GameSession, SessionStatus
 from app.redis_state import redis_store
-from app.schemas import Phase, room_state_for_client
+from app.schemas import room_state_for_client
 from app.services.card_deal import public_card_view
 from app.services.helixa_adapter import FALLBACK_REPLY, request_private_reply
 
@@ -27,7 +26,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
 
-ALLOWED_ACTIONS = {"chat", "pitch", "vote", "phase", "private_chat_send", "reveal_card", "move_to", "ping"}
+ALLOWED_ACTIONS = {
+    "chat",
+    "pitch",
+    "vote",
+    "leave",
+    "private_chat_send",
+    "reveal_card",
+    "move_to",
+    "ping",
+    "start_match",
+}
 
 
 async def _session_is_finished(room_id: str) -> bool:
@@ -104,6 +113,31 @@ async def _handle_reveal_card(
         )
         return
 
+    # Peek type before mutating — turn / phase gate
+    hand = await redis_store.get_hand(room_id, client_id)
+    pending_type: str | None = None
+    if hand:
+        for c in hand:
+            if str(c.get("id")) == card_id:
+                pending_type = str(c.get("type") or "") or None
+                break
+
+    from app.services.match_flow import advance_reveal, validate_player_reveal
+
+    gate_err = await validate_player_reveal(room_id, client_id, pending_type)
+    if gate_err:
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": f"reveal_card denied: {gate_err}",
+                "ts": _now_iso(),
+            },
+        )
+        return
+
     card, err = await redis_store.reveal_card_in_hand(room_id, client_id, card_id)
     if err or card is None:
         await manager.send_personal(
@@ -151,6 +185,140 @@ async def _handle_reveal_card(
             "timestamp": msg["ts"],
         },
     )
+
+    if state is not None:
+        await advance_reveal(room_id, state, expected_client_id=client_id)
+
+
+async def _handle_leave(room_id: str, client_id: str) -> None:
+    """Explicit abandon: dead for match / out of convoy; room continues."""
+    state = await redis_store.abandon_player(room_id, client_id)
+    if state is not None and state.is_private and not state.roles_assigned:
+        from app.services.matchmaking import ensure_host
+
+        if ensure_host(state):
+            await redis_store.save_room(state)
+            state = await redis_store.get_room(room_id) or state
+
+    leave = {
+        "type": "player_left",
+        "room_id": room_id,
+        "client_id": client_id,
+        "abandoned": True,
+        "state": room_state_for_client(state) if state else None,
+        "ts": _now_iso(),
+    }
+    await redis_store.append_event(
+        room_id,
+        {
+            "user_id": client_id,
+            "is_ai": False,
+            "action_type": "leave",
+            "raw_payload": leave,
+            "timestamp": leave["ts"],
+        },
+    )
+    await manager.broadcast(room_id, leave)
+    await event_bus.publish(
+        "message",
+        {
+            "room_id": room_id,
+            "action": "leave",
+            "phase": state.phase.value if state else None,
+            "is_ai": False,
+        },
+    )
+    logger.info("client abandoned room=%s client=%s", room_id, client_id)
+
+
+async def _handle_start_match(room_id: str, client_id: str) -> None:
+    """Private lobby: host starts early (bots fill empty seats)."""
+    state = await redis_store.get_room(room_id)
+    if state is None:
+        return
+    if not state.is_private:
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "start_match is only for private rooms",
+                "ts": _now_iso(),
+            },
+        )
+        return
+    if state.roles_assigned or state.phase.value != "Init":
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "Match already started",
+                "ts": _now_iso(),
+            },
+        )
+        return
+
+    from app.services.matchmaking import ensure_host, try_finish_matchmaking
+
+    # Repair host only if seat abandoned — never steal on soft-disconnect
+    if ensure_host(state):
+        await redis_store.save_room(state)
+        state = await redis_store.get_room(room_id) or state
+
+    if state.host_client_id != client_id:
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "Only the host can start the match",
+                "ts": _now_iso(),
+            },
+        )
+        return
+
+    await try_finish_matchmaking(room_id, force=True)
+
+
+async def _handle_vote(room_id: str, client_id: str, data: dict[str, Any]) -> None:
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    target = str(
+        payload.get("target_character_id")
+        or payload.get("target")
+        or data.get("text")
+        or ""
+    ).strip()
+    if not target:
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "vote requires target_character_id",
+                "ts": _now_iso(),
+            },
+        )
+        return
+
+    from app.services.match_flow import cast_vote
+
+    _state, err = await cast_vote(room_id, client_id, target)
+    if err:
+        await manager.send_personal(
+            room_id,
+            client_id,
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": f"vote denied: {err}",
+                "ts": _now_iso(),
+            },
+        )
 
 
 async def _send_private_sync(room_id: str, client_id: str) -> None:
@@ -326,7 +494,12 @@ async def _private_agent_reply(
 
 
 @router.websocket("/ws/room/{room_id}/{client_id}")
-async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> None:
+async def room_websocket(
+    websocket: WebSocket,
+    room_id: str,
+    client_id: str,
+    seat_token: str | None = Query(default=None),
+) -> None:
     if await _session_is_finished(room_id):
         await websocket.accept()
         await websocket.send_json(
@@ -340,21 +513,59 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
         await websocket.close(code=4001)
         return
 
-    prior = await redis_store.get_room(room_id)
-    is_reconnect = bool(prior and client_id in prior.players)
+    from app.services.matchmaking import claim_lobby_seat, try_finish_matchmaking
+
+    # Ensure room shell exists for brand-new sessions before claim
+    await redis_store.ensure_room(room_id, session_id=room_id)
+
+    status, state, is_reconnect = await claim_lobby_seat(
+        room_id, client_id, seat_token
+    )
+    if status == "missing":
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "Room not found",
+                "ts": _now_iso(),
+            }
+        )
+        await websocket.close(code=4004)
+        return
+    if status in ("full", "bad_token"):
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "Room is full"
+                if status == "full"
+                else "Invalid or expired seat token",
+                "ts": _now_iso(),
+            }
+        )
+        await websocket.close(code=4003)
+        return
+    if status == "started":
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "room_id": room_id,
+                "text": "Match already started",
+                "ts": _now_iso(),
+            }
+        )
+        await websocket.close(code=4002)
+        return
 
     await manager.connect(room_id, client_id, websocket)
 
-    state = await redis_store.ensure_room(room_id, session_id=room_id)
-    state = await redis_store.upsert_player(
-        room_id, client_id, is_ai=False, connected=True
-    )
-
-    # Fill seats with mock Helixa bots before first snapshot
-    await ensure_mock_agents(room_id)
+    state = await try_finish_matchmaking(room_id) or state
     state = await redis_store.get_room(room_id) or state
 
-    # Snapshot to the joining client (full room: humans + bots + roles)
+    # Snapshot to the joining client
     await manager.send_personal(
         room_id,
         client_id,
@@ -366,6 +577,20 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
             "ts": _now_iso(),
         },
     )
+
+    # Keep other searchers' lobby counters in sync
+    if state.phase.value == "Init" and not state.roles_assigned:
+        await manager.broadcast(
+            room_id,
+            {
+                "type": "state",
+                "room_id": room_id,
+                "client_id": client_id,
+                "state": room_state_for_client(state),
+                "ts": _now_iso(),
+            },
+            exclude=client_id,
+        )
 
     # Replay buffered events so refresh restores public chat
     history_events = await redis_store.list_events(
@@ -458,51 +683,16 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
                 await _handle_reveal_card(room_id, client_id, data)
                 continue
 
-            if action == "phase":
-                phase_name = str(data.get("text") or data.get("phase") or "").strip()
-                try:
-                    new_phase = Phase(phase_name) if phase_name else Phase.pitch
-                except ValueError:
-                    await manager.send_personal(
-                        room_id,
-                        client_id,
-                        {
-                            "type": "error",
-                            "room_id": room_id,
-                            "text": f"Invalid phase. Use: {[p.value for p in Phase]}",
-                            "ts": _now_iso(),
-                        },
-                    )
-                    continue
-                state = await redis_store.set_phase(room_id, new_phase)
-                out = {
-                    "type": "phase_changed",
-                    "room_id": room_id,
-                    "client_id": client_id,
-                    "phase": state.phase.value,
-                    "state": room_state_for_client(state),
-                    "ts": _now_iso(),
-                }
-                await manager.broadcast(room_id, out)
-                await redis_store.append_event(
-                    room_id,
-                    {
-                        "user_id": client_id,
-                        "is_ai": False,
-                        "action_type": "phase",
-                        "raw_payload": out,
-                        "timestamp": out["ts"],
-                    },
-                )
-                await event_bus.publish(
-                    "message",
-                    {
-                        "room_id": room_id,
-                        "action": "phase_changed",
-                        "phase": state.phase.value,
-                        "is_ai": False,
-                    },
-                )
+            if action == "vote":
+                await _handle_vote(room_id, client_id, data)
+                continue
+
+            if action == "leave":
+                await _handle_leave(room_id, client_id)
+                continue
+
+            if action == "start_match":
+                await _handle_start_match(room_id, client_id)
                 continue
 
             text = data.get("text")
@@ -544,11 +734,19 @@ async def room_websocket(websocket: WebSocket, room_id: str, client_id: str) -> 
         if current is not None and current.client_state != WebSocketState.CONNECTED:
             pass
         manager.disconnect(room_id, client_id)
-        await redis_store.mark_disconnected(room_id, client_id)
+        prior = await redis_store.get_room(room_id)
+        prior_player = prior.players.get(client_id) if prior else None
+        # Explicit leave already broadcast player_left + is_alive=False
+        if prior_player is not None and not prior_player.is_alive:
+            await redis_store.mark_disconnected(room_id, client_id)
+            return
+        state = await redis_store.mark_disconnected(room_id, client_id)
         leave = {
             "type": "player_left",
             "room_id": room_id,
             "client_id": client_id,
+            "abandoned": False,
+            "state": room_state_for_client(state) if state else None,
             "ts": _now_iso(),
         }
         await manager.broadcast(room_id, leave)

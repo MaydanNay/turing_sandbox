@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { HudChatLine } from '@/data/mockHud';
+import type { HudChatLine, HudPlayerSlot } from '@/data/mockHud';
 import {
   getPhaseCountdownConfig,
   isInVoteWindow,
@@ -8,7 +8,8 @@ import {
 } from '@/data/gamePhaseConfig';
 import type { PlayerHandCard } from '@/types/card';
 import type { ChatMessage, GamePhase, MyProfile, Player } from '@/types/game';
-import { usePhaseCountdown } from '@/hooks/usePhaseCountdown';
+import { useDeadlineCountdown, usePhaseCountdown } from '@/hooks/usePhaseCountdown';
+import { useGameStore } from '@/store/gameStore';
 import { chatMessagesToHudLines, playersToSidebarSlots } from '@/utils/chatAdapter';
 
 import { GameChatPanel } from './GameChatPanel';
@@ -104,58 +105,82 @@ export function GameHud({
   onOpenPanel,
 }: GameHudProps) {
   const [forceVoting, setForceVoting] = useState(false);
+  const phaseDeadlineTs = useGameStore((s) => s.phaseDeadlineTs);
+  const phaseDurationSec = useGameStore((s) => s.phaseDurationSec);
+  const voteOpen = useGameStore((s) => s.voteOpen);
+  const revealCardType = useGameStore((s) => s.revealCardType);
+  const revealDeadlineTs = useGameStore((s) => s.revealDeadlineTs);
+  const revealTurnClientId = useGameStore((s) => s.revealTurnClientId);
 
   const pendingRevealId =
     (isMyTurnToReveal && myProfile?.characterId) ||
     pendingRevealCharacterId(chat, players);
 
-  const activeCharacterId = pendingRevealId ?? activeCharacterFromChat(
-    chat,
-    players,
-    false,
-    myProfile,
-  );
+  const revealTurnPlayer = revealTurnClientId
+    ? players.find((p) => p.id === revealTurnClientId) ?? null
+    : null;
+
+  const activeCharacterId =
+    revealTurnPlayer?.characterId ??
+    pendingRevealId ??
+    activeCharacterFromChat(chat, players, false, myProfile);
 
   const sidebarPlayers = playersToSidebarSlots(players, activeCharacterId);
-  const revealPlayer = pendingRevealId
-    ? sidebarPlayers.find((p) => p.id === pendingRevealId) ?? null
-    : null;
+  const revealPlayer: HudPlayerSlot | null = revealTurnPlayer
+    ? sidebarPlayers.find((p) => p.id === revealTurnPlayer.characterId) ?? null
+    : pendingRevealId
+      ? sidebarPlayers.find((p) => p.id === pendingRevealId) ?? null
+      : null;
 
   const revealCharacterId =
     revealPlayer && isRevealPhase(gamePhase) ? revealPlayer.id : null;
 
-  const { resetKey, initialSeconds } = getPhaseCountdownConfig(
-    gamePhase,
-    gatheredAtTable,
-    revealCharacterId,
-  );
+  const {
+    resetKey,
+    initialSeconds,
+    showReveal: revealTurnClock,
+  } = getPhaseCountdownConfig(gamePhase, gatheredAtTable, revealCharacterId);
 
-  const remaining = usePhaseCountdown(initialSeconds, resetKey);
+  const localRemaining = usePhaseCountdown(initialSeconds, resetKey);
+  const serverPhaseRemaining = useDeadlineCountdown(phaseDeadlineTs);
+  const serverRevealRemaining = useDeadlineCountdown(revealDeadlineTs);
+  const remaining =
+    revealDeadlineTs != null && revealTurnClock
+      ? serverRevealRemaining
+      : phaseDeadlineTs != null
+        ? serverPhaseRemaining
+        : localRemaining;
 
   const handleMockStartVoting = useCallback(() => {
     setForceVoting(true);
   }, []);
 
-  const isMyRevealTurn = Boolean(
-    isMyTurnToReveal ||
-      (myProfile && pendingRevealId === myProfile.characterId),
-  );
+  // Live: trust server turn flag only. Mock/chat heuristic is fallback.
+  const effectiveMyRevealTurn = Boolean(isMyTurnToReveal);
 
   const isVotingMode =
-    forceVoting || gamePhase === 'VOTE' || isInVoteWindow(gamePhase, remaining);
+    forceVoting ||
+    voteOpen ||
+    gamePhase === 'VOTE' ||
+    isInVoteWindow(gamePhase, remaining, phaseDurationSec);
 
-  const forcePanelOpen = isMyRevealTurn || isVotingMode;
+  const forcePanelOpen = effectiveMyRevealTurn || isVotingMode;
   const wasForceOpen = useRef(false);
 
-  // Auto-open once when reveal/vote starts; allow user to close afterwards.
+  // Mandatory reveal: keep panel open on your turn. Vote: auto-open once.
   useEffect(() => {
+    if (effectiveMyRevealTurn) {
+      onOpenPanel?.();
+      wasForceOpen.current = true;
+      return;
+    }
     if (forcePanelOpen && !wasForceOpen.current) {
       onOpenPanel?.();
     }
     wasForceOpen.current = forcePanelOpen;
-  }, [forcePanelOpen, onOpenPanel]);
+  }, [forcePanelOpen, effectiveMyRevealTurn, onOpenPanel]);
 
-  if (!visible || !panelOpen) return null;
+  if (!visible || (!panelOpen && !effectiveMyRevealTurn)) return null;
 
   const hudMessages: HudChatLine[] = chatMessagesToHudLines(chat, players, myProfile);
 
@@ -175,21 +200,25 @@ export function GameHud({
         myProfile={myProfile}
         selfId={selfCharacterId}
         onSend={onSendMessage}
-        inputDisabled={isMyRevealTurn}
+        inputDisabled={effectiveMyRevealTurn}
         typing={typing}
         topOffsetClass="top-4"
         gamePhase={gamePhase}
         revealPlayer={revealPlayer}
-        isMyRevealTurn={isMyRevealTurn}
+        isMyRevealTurn={effectiveMyRevealTurn}
         gatheredAtTable={gatheredAtTable}
         handCards={handCards}
         onRevealCard={onRevealCard}
+        revealCardType={revealCardType}
         isVotingMode={isVotingMode}
         hasVoted={hasVoted}
         onVoteToBrig={onVoteToBrig}
         mockMode={mockMode}
         onMockStartVoting={handleMockStartVoting}
         forceVoting={forceVoting}
+        phaseDeadlineTs={phaseDeadlineTs}
+        phaseDurationSec={phaseDurationSec}
+        revealDeadlineTs={revealDeadlineTs}
         onClose={onClosePanel}
       />
     </div>

@@ -15,9 +15,17 @@ export function getWsBase(): string {
   return `${protocol}//${window.location.host}`;
 }
 
-export function buildWsUrl(roomId: string, clientId: string): string {
+export function buildWsUrl(
+  roomId: string,
+  clientId: string,
+  seatToken?: string | null,
+): string {
   const base = getWsBase();
-  return `${base}/ws/room/${roomId}/${clientId}`;
+  const url = `${base}/ws/room/${roomId}/${clientId}`;
+  if (seatToken) {
+    return `${url}?seat_token=${encodeURIComponent(seatToken)}`;
+  }
+  return url;
 }
 
 export function buildApiUrl(path: string): string {

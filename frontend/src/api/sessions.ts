@@ -31,10 +31,41 @@ export interface SessionEventsResponse {
   events: SessionEventItem[];
 }
 
-export async function createSession(): Promise<SessionCreateResponse> {
-  const res = await fetch(buildApiUrl('/api/v1/sessions'), { method: 'POST' });
+export async function createSession(options?: {
+  matchDurationMinutes?: 7 | 15 | 30;
+  private?: boolean;
+}): Promise<SessionCreateResponse> {
+  const res = await fetch(buildApiUrl('/api/v1/sessions'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      match_duration_minutes: options?.matchDurationMinutes ?? 15,
+      private: Boolean(options?.private),
+    }),
+  });
   if (!res.ok) {
     throw new Error(`Failed to create session: ${res.status}`);
+  }
+  return res.json() as Promise<SessionCreateResponse>;
+}
+
+export async function joinSessionByInvite(
+  inviteCode: string,
+): Promise<SessionCreateResponse> {
+  const res = await fetch(buildApiUrl('/api/v1/sessions/join'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ invite_code: inviteCode.trim().toUpperCase() }),
+  });
+  if (!res.ok) {
+    let detail = `Failed to join: ${res.status}`;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (body.detail) detail = body.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
   }
   return res.json() as Promise<SessionCreateResponse>;
 }

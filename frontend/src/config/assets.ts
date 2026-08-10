@@ -6,7 +6,7 @@
  */
 export const ASSETS = {
   locations: {
-    outpost: '/assets/locations/локация.png',
+    outpost: '/assets/locations/outpost.jpg',
     outpostNight: '/assets/locations/outpost-night.png',
     menu: '/assets/locations/menu.png',
   },

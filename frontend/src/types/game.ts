@@ -57,7 +57,16 @@ export interface MyProfile {
 
 /** Client → server WS payload */
 export interface WsOutboundAction {
-  action: 'chat' | 'pitch' | 'vote' | 'phase' | 'private_chat_send' | 'reveal_card' | 'move_to' | 'ping';
+  action:
+    | 'chat'
+    | 'pitch'
+    | 'vote'
+    | 'leave'
+    | 'private_chat_send'
+    | 'reveal_card'
+    | 'move_to'
+    | 'ping'
+    | 'start_match';
   type?: 'private_chat_send' | 'reveal_card';
   text?: string;
   payload?: Record<string, unknown>;
@@ -83,6 +92,7 @@ export interface BackendPlayerInfo {
   character_id?: string | null;
   is_ai: boolean;
   connected: boolean;
+  is_alive?: boolean;
 }
 
 export interface BackendRoomState {
@@ -99,8 +109,20 @@ export interface BackendRoomState {
     | 'Resolve'
     | 'Finished';
   phase_deadline_ts: number | null;
+  match_duration_minutes?: number | null;
+  matchmaking_deadline_ts?: number | null;
+  is_private?: boolean;
+  invite_code?: string | null;
+  host_client_id?: string | null;
   players: Record<string, BackendPlayerInfo>;
   roles_assigned: boolean;
+  brig_character_ids?: string[];
+  votes?: Record<string, string>;
+  vote_open?: boolean;
+  reveal_queue?: string[];
+  reveal_index?: number;
+  reveal_deadline_ts?: number | null;
+  reveal_card_type?: string | null;
 }
 
 export interface BackendStateMessage {
@@ -143,6 +165,37 @@ export interface BackendPlayerLeftMessage {
   type: 'player_left';
   room_id: string;
   client_id: string;
+  abandoned?: boolean;
+  state?: BackendRoomState | null;
+  ts: string;
+}
+
+export interface EpiloguePlayerRow {
+  client_id: string;
+  character_id: string | null;
+  name: string;
+  role?: string | null;
+  faction?: string | null;
+  is_ai?: boolean;
+  location?: string;
+  in_convoy?: boolean;
+  in_brig?: boolean;
+}
+
+export interface EpilogueReport {
+  winning_team: string;
+  synthetics_in_convoy: number;
+  convoy: EpiloguePlayerRow[];
+  brig: EpiloguePlayerRow[];
+  players?: EpiloguePlayerRow[];
+}
+
+export interface BackendMatchEndedMessage {
+  type: 'match_ended';
+  room_id: string;
+  phase?: string;
+  payload: EpilogueReport;
+  state?: BackendRoomState;
   ts: string;
 }
 
@@ -232,6 +285,7 @@ export interface BackendCardRevealedMessage {
   client_id: string;
   character_id?: string | null;
   card: BackendHandCard;
+  forced?: boolean;
   ts: string;
 }
 
@@ -240,6 +294,48 @@ export interface BackendRevealedCardsSyncMessage {
   room_id: string;
   client_id?: string;
   by_player: Record<string, BackendHandCard[]>;
+  ts: string;
+}
+
+export interface BackendRevealTurnMessage {
+  type: 'reveal_turn';
+  room_id: string;
+  client_id: string | null;
+  character_id?: string | null;
+  card_type?: string | null;
+  deadline_ts?: number | null;
+  queue_index?: number;
+  queue_len?: number;
+  state: BackendRoomState;
+  ts: string;
+}
+
+export interface BackendVoteCastMessage {
+  type: 'vote_cast';
+  room_id: string;
+  client_id: string;
+  character_id?: string | null;
+  target_character_id: string;
+  votes: Record<string, string>;
+  state: BackendRoomState;
+  ts: string;
+}
+
+export interface BackendVoteOpenedMessage {
+  type: 'vote_opened';
+  room_id: string;
+  deadline_ts?: number | null;
+  state: BackendRoomState;
+  ts: string;
+}
+
+export interface BackendVoteResolvedMessage {
+  type: 'vote_resolved';
+  room_id: string;
+  tied: boolean;
+  target_character_id: string | null;
+  brig_character_ids: string[];
+  state: BackendRoomState;
   ts: string;
 }
 
@@ -256,13 +352,22 @@ export type BackendWsMessage =
   | BackendPrivateChatSyncMessage
   | BackendHandMessage
   | BackendCardRevealedMessage
-  | BackendRevealedCardsSyncMessage;
+  | BackendRevealedCardsSyncMessage
+  | BackendRevealTurnMessage
+  | BackendVoteCastMessage
+  | BackendVoteOpenedMessage
+  | BackendVoteResolvedMessage
+  | BackendMatchEndedMessage;
 
 export interface SessionCreateResponse {
   session_id: string;
   room_id: string;
   status: string;
   ws_url: string;
+  match_duration_minutes?: number | null;
+  invite_code?: string | null;
+  is_private?: boolean;
+  seat_token?: string | null;
 }
 
 export interface TypingIndicator {

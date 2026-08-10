@@ -12,7 +12,11 @@ import { useGameStore } from '@/store/gameStore';
 import type { BackendWsMessage, WsClientMessage, WsOutboundAction } from '@/types/game';
 
 interface WebSocketContextValue {
-  connect: (roomId: string, clientId: string) => void;
+  connect: (
+    roomId: string,
+    clientId: string,
+    options?: { seatToken?: string | null },
+  ) => void;
   disconnect: () => void;
   send: (payload: WsOutboundAction) => void;
   sendClientMessage: (payload: WsClientMessage) => void;
@@ -67,12 +71,13 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, [setConnected]);
 
   const connect = useCallback(
-    (roomId: string, clientId: string) => {
+    (roomId: string, clientId: string, options?: { seatToken?: string | null }) => {
       disconnect();
       setConnectionMeta(roomId, clientId);
       setError(null);
 
-      const url = buildWsUrl(roomId, clientId);
+      const seatToken = options?.seatToken ?? null;
+      const url = buildWsUrl(roomId, clientId, seatToken);
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
@@ -99,6 +104,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         }
         setConnected(false);
         // Do not auto-reconnect if closed normally (e.g., manual disconnect)
+        // Reconnect without seat_token — player already holds an alive seat
         if (e.code !== 1000 && e.code !== 4000) {
           reconnectTimeoutRef.current = window.setTimeout(() => {
             connect(roomId, clientId);

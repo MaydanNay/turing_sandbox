@@ -7,7 +7,7 @@ import {
   getCharacterById,
   rollSessionAges,
 } from '@/data/characters';
-import { getPhaseMeta } from '@/data/gamePhaseConfig';
+import { BRIG_CAPACITY, getPhaseMeta } from '@/data/gamePhaseConfig';
 import { evaluateMeetingCallGate } from '@/data/meetingCallLimits';
 import type {
   BackendHandCard,
@@ -15,6 +15,7 @@ import type {
   BackendRoomState,
   BackendWsMessage,
   ChatMessage,
+  EpilogueReport,
   GamePhase,
   MyProfile,
   Player,
@@ -61,6 +62,28 @@ interface GameStore {
   brigCharacterIds: string[];
   /** voter player id → target characterId */
   votes: Record<string, string>;
+  /** Server phase deadline (unix seconds); null = local/mock countdown */
+  phaseDeadlineTs: number | null;
+  /** Length of current phase in seconds (from server deadline at phase start) */
+  phaseDurationSec: number | null;
+  /** Server: voting window is open */
+  voteOpen: boolean;
+  /** Server: whose reveal turn (client_id) */
+  revealTurnClientId: string | null;
+  /** Server: required card type for current reveal round */
+  revealCardType: string | null;
+  revealDeadlineTs: number | null;
+  /** Room preset: minutes until convoy (7 | 15 | 30) */
+  matchDurationMinutes: number | null;
+  /** Matchmaking open until this unix deadline (Init, before roles) */
+  matchmakingDeadlineTs: number | null;
+  rolesAssigned: boolean;
+  isPrivate: boolean;
+  inviteCode: string | null;
+  hostClientId: string | null;
+  /** After convoy boarding — server epilogue payload */
+  matchEnded: boolean;
+  epilogueReport: EpilogueReport | null;
 
   setConnectionMeta: (roomId: string, clientId: string) => void;
   setConnected: (connected: boolean) => void;
@@ -88,7 +111,10 @@ interface GameStore {
   leaveTable: () => void;
   castVoteToBrig: (targetCharacterId: string) => void;
   applyHistoryEvents: (events: BackendHistoryEvent[]) => void;
-  applyUiSnapshot: (snapshot: UiSnapshot, opts?: { restoreGathered?: boolean }) => void;
+  applyUiSnapshot: (
+    snapshot: UiSnapshot,
+    opts?: { restoreGathered?: boolean; restoreBrigVotes?: boolean },
+  ) => void;
   reset: () => void;
 }
 
@@ -172,6 +198,7 @@ function backendPlayersToFrontend(
         stats: info.role ? { Профессия: info.role } : { Роль: character.role },
         is_ai: info.is_ai,
         connected: info.connected,
+        is_alive: info.is_alive !== false,
       },
     );
   });
@@ -196,6 +223,20 @@ const initialState = {
   lastMeetingCallAt: null as number | null,
   brigCharacterIds: [] as string[],
   votes: {} as Record<string, string>,
+  phaseDeadlineTs: null as number | null,
+  phaseDurationSec: null as number | null,
+  voteOpen: false,
+  revealTurnClientId: null as string | null,
+  revealCardType: null as string | null,
+  revealDeadlineTs: null as number | null,
+  matchDurationMinutes: null as number | null,
+  matchmakingDeadlineTs: null as number | null,
+  rolesAssigned: false,
+  isPrivate: false,
+  inviteCode: null as string | null,
+  hostClientId: null as string | null,
+  matchEnded: false,
+  epilogueReport: null as EpilogueReport | null,
 };
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -230,6 +271,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
       lastMeetingCallAt: null,
       brigCharacterIds: [],
       votes: {},
+      phaseDeadlineTs: null,
+      phaseDurationSec: null,
+      voteOpen: false,
+      revealTurnClientId: null,
+      revealCardType: null,
+      revealDeadlineTs: null,
+      matchDurationMinutes: null,
+      matchmakingDeadlineTs: null,
+      rolesAssigned: false,
+      isPrivate: false,
+      inviteCode: null,
+      hostClientId: null,
+      matchEnded: false,
+      epilogueReport: null,
     });
   },
 
@@ -245,12 +300,57 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const gatheredAtTable =
       gameState === 'INIT' ? false : get().gatheredAtTable;
 
+    const deadline =
+      typeof state.phase_deadline_ts === 'number' ? state.phase_deadline_ts : null;
+    const phaseChanged = get().gameState !== gameState;
+    let phaseDurationSec = get().phaseDurationSec;
+    if (phaseChanged) {
+      phaseDurationSec =
+        deadline != null ? Math.max(0, deadline - Date.now() / 1000) : null;
+    } else if (deadline != null && phaseDurationSec == null) {
+      phaseDurationSec = Math.max(0, deadline - Date.now() / 1000);
+    }
+
+    const revealQueue = state.reveal_queue ?? [];
+    const revealIndex = state.reveal_index ?? 0;
+    const revealTurnClientId =
+      revealQueue.length > 0 && revealIndex >= 0 && revealIndex < revealQueue.length
+        ? revealQueue[revealIndex]!
+        : null;
+
     set({
       roomId: state.room_id,
       gameState,
       sessionAges,
       players,
       gatheredAtTable,
+      phaseDeadlineTs: deadline,
+      phaseDurationSec,
+      brigCharacterIds: state.brig_character_ids ?? get().brigCharacterIds,
+      votes: state.votes ?? {},
+      voteOpen: Boolean(state.vote_open),
+      revealTurnClientId,
+      revealCardType: state.reveal_card_type ?? null,
+      revealDeadlineTs:
+        typeof state.reveal_deadline_ts === 'number' ? state.reveal_deadline_ts : null,
+      matchDurationMinutes:
+        typeof state.match_duration_minutes === 'number'
+          ? state.match_duration_minutes
+          : get().matchDurationMinutes,
+      matchmakingDeadlineTs:
+        typeof state.matchmaking_deadline_ts === 'number'
+          ? state.matchmaking_deadline_ts
+          : null,
+      rolesAssigned: Boolean(state.roles_assigned),
+      isPrivate: Boolean(state.is_private),
+      inviteCode:
+        typeof state.invite_code === 'string' && state.invite_code
+          ? state.invite_code
+          : null,
+      hostClientId:
+        typeof state.host_client_id === 'string' && state.host_client_id
+          ? state.host_client_id
+          : null,
       myProfile: self ? playerToMyProfile(self, hand) : get().myProfile,
     });
   },
@@ -295,8 +395,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         get().applyRoomState(msg.state, msg.client_id);
         {
           const snap = loadUiSnapshot(msg.room_id);
-          // Restore brig/votes only — never re-seat from a stale snapshot
-          if (snap) get().applyUiSnapshot(snap, { restoreGathered: false });
+          // Restore seating UX only — brig/votes come from server state
+          if (snap) get().applyUiSnapshot(snap, { restoreGathered: false, restoreBrigVotes: false });
         }
         break;
       case 'history':
@@ -313,6 +413,56 @@ export const useGameStore = create<GameStore>((set, get) => ({
           text: `>>> ФАЗА: ${msg.phase.toUpperCase()}`,
           timestamp: msg.ts,
         });
+        break;
+      case 'reveal_turn':
+        get().applyRoomState(msg.state, clientId ?? undefined);
+        if (msg.client_id) {
+          const who =
+            get().players.find((p) => p.id === msg.client_id)?.name ??
+            msg.character_id ??
+            msg.client_id;
+          get().addChatMessage({
+            sender: 'Система',
+            text: `Время ${who} раскрывать карту${msg.card_type ? ` (${msg.card_type})` : ''}.`,
+            kind: 'turn',
+            timestamp: msg.ts,
+          });
+        }
+        break;
+      case 'vote_opened':
+        get().applyRoomState(msg.state, clientId ?? undefined);
+        get().addChatMessage({
+          sender: 'Система',
+          text: '>>> Открыто голосование: кого отправить в Карцер?',
+          kind: 'system',
+          timestamp: msg.ts,
+        });
+        break;
+      case 'vote_cast':
+        get().applyRoomState(msg.state, clientId ?? undefined);
+        break;
+      case 'vote_resolved':
+        get().applyRoomState(msg.state, clientId ?? undefined);
+        if (msg.target_character_id) {
+          const name =
+            get().players.find((p) => p.characterId === msg.target_character_id)?.name ??
+            msg.target_character_id;
+          get().addChatMessage({
+            sender: 'Система',
+            text: `>>> ${name} отправлен в Карцер по результатам голосования.`,
+            kind: 'system',
+            timestamp: msg.ts,
+          });
+        } else {
+          get().addChatMessage({
+            sender: 'Система',
+            text: msg.tied
+              ? '>>> Голосование: ничья — никто не отправлен в Карцер.'
+              : '>>> Голосование завершено без изгнания.',
+            kind: 'system',
+            timestamp: msg.ts,
+          });
+        }
         break;
       case 'message': {
         const players = get().players;
@@ -348,12 +498,39 @@ export const useGameStore = create<GameStore>((set, get) => ({
         });
         break;
       case 'player_left':
+        if (msg.state) {
+          get().applyRoomState(msg.state, clientId ?? undefined);
+        }
         get().addChatMessage({
           sender: 'Система',
-          text: `>>> ${msg.client_id} покинул канал.`,
+          text: msg.abandoned
+            ? `>>> ${msg.client_id} покинул матч (вне Конвоя).`
+            : `>>> ${msg.client_id} отключился.`,
           timestamp: msg.ts,
         });
         break;
+      case 'match_ended': {
+        if (msg.state) {
+          get().applyRoomState(msg.state, clientId ?? undefined);
+        }
+        const report = msg.payload;
+        if (!report || typeof report.synthetics_in_convoy !== 'number') {
+          break;
+        }
+        set({
+          matchEnded: true,
+          epilogueReport: report,
+          gameState: 'RESOLVE',
+          phaseDeadlineTs: null,
+        });
+        get().addChatMessage({
+          sender: 'Система',
+          text: `>>> Конвой ушёл. В Конвой проникло ${report.synthetics_in_convoy} Синтетиков (${report.winning_team}).`,
+          kind: 'system',
+          timestamp: msg.ts,
+        });
+        break;
+      }
       case 'error':
         set({ error: msg.text });
         break;
@@ -602,6 +779,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ votes: nextVotes });
 
     if (brigCharacterIds.includes(targetCharacterId)) return;
+    // Mock-only instant brig; live rooms resolve via server.
+    if (brigCharacterIds.length >= BRIG_CAPACITY) return;
 
     set({
       players: players.map((p) =>
@@ -686,13 +865,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   applyUiSnapshot: (snapshot, opts) => {
     const restoreGathered = opts?.restoreGathered !== false;
+    const restoreBrigVotes = opts?.restoreBrigVotes !== false;
     set({
       ...(restoreGathered ? { gatheredAtTable: snapshot.gatheredAtTable } : {}),
       seatedPlayerIds: snapshot.seatedPlayerIds ?? [],
       meetingCallsUsed: snapshot.meetingCallsUsed ?? 0,
       lastMeetingCallAt: snapshot.lastMeetingCallAt ?? null,
-      brigCharacterIds: snapshot.brigCharacterIds ?? [],
-      votes: snapshot.votes ?? {},
+      ...(restoreBrigVotes
+        ? {
+            brigCharacterIds: snapshot.brigCharacterIds ?? [],
+            votes: snapshot.votes ?? {},
+          }
+        : {}),
       sessionAges:
         Object.keys(snapshot.sessionAges ?? {}).length > 0
           ? snapshot.sessionAges

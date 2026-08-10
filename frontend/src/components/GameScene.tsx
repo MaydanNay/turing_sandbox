@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { BottomHand } from '@/components/Hand';
 import { BrigGrid } from '@/components/Brig/BrigGrid';
+import { BrigHoldScreen } from '@/components/Brig/BrigHoldScreen';
 import { CharacterActionMenu } from '@/components/CharacterActionMenu';
 import { ChatToastStack } from '@/components/Chat/ChatToastStack';
+import { EpilogueOverlay } from '@/components/EpilogueOverlay';
 import { GameHud } from '@/components/Hud';
 import { GameTopMenu } from '@/components/GameTopMenu';
+import { MatchmakingOverlay } from '@/components/MatchmakingOverlay';
 import { MeetingAnnouncement } from '@/components/MeetingAnnouncement';
 import { PrivateChatOverlay } from '@/components/PrivateChat';
 import { RoundTable } from '@/components/RoundTable';
@@ -14,6 +17,7 @@ import { TableMeetingModal } from '@/components/TableMeetingModal';
 import { isWalkEditEnabled, WalkEditorOverlay } from '@/components/WalkEditorOverlay';
 import { useGeneralChatEffects } from '@/hooks/useGeneralChatEffects';
 import { cardRevealLabel } from '@/utils/cardLabel';
+import { useWebSocket } from '@/providers/WebSocketProvider';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import { useGameStore } from '@/store/gameStore';
 import { useOutpostMovementStore } from '@/store/outpostMovementStore';
@@ -68,13 +72,19 @@ export function GameScene({
 }: GameSceneProps) {
   const handCards = useGameStore((s) => s.myHand);
   const revealMyCard = useGameStore((s) => s.revealMyCard);
-  const [isMyTurnToReveal, setIsMyTurnToReveal] = useState(false);
   const recordCardReveal = useGameStore((s) => s.recordCardReveal);
+  const castVoteToBrig = useGameStore((s) => s.castVoteToBrig);
+  const revealTurnClientId = useGameStore((s) => s.revealTurnClientId);
+  const voteOpen = useGameStore((s) => s.voteOpen);
+  const [mockRevealTurn, setMockRevealTurn] = useState(false);
   const brigCharacterIds = useGameStore((s) => s.brigCharacterIds);
+  const matchEnded = useGameStore((s) => s.matchEnded);
+  const epilogueReport = useGameStore((s) => s.epilogueReport);
+  const phaseDeadlineTs = useGameStore((s) => s.phaseDeadlineTs);
+  const rolesAssigned = useGameStore((s) => s.rolesAssigned);
   const votes = useGameStore((s) => s.votes);
   const meetingCallsUsed = useGameStore((s) => s.meetingCallsUsed);
   const lastMeetingCallAt = useGameStore((s) => s.lastMeetingCallAt);
-  const castVoteToBrig = useGameStore((s) => s.castVoteToBrig);
   const [privateChatPlayerId, setPrivateChatPlayerId] = useState<string | null>(null);
   const [actionMenuPlayerId, setActionMenuPlayerId] = useState<string | null>(null);
   const [actionMenuAnchor, setActionMenuAnchor] = useState<DOMRect | null>(null);
@@ -85,6 +95,15 @@ export function GameScene({
   const mockPrivatePingRef = useRef(false);
   const walkEdit = useMemo(() => isWalkEditEnabled(), []);
 
+  const selfClientId = clientId ?? myProfile?.id ?? null;
+  const isMyTurnToReveal = mockMode
+    ? mockRevealTurn
+    : Boolean(
+        !voteOpen &&
+          revealTurnClientId &&
+          selfClientId &&
+          revealTurnClientId === selfClientId,
+      );
   const openGeneralChat = useCallback(() => {
     setGeneralChatOpen(true);
   }, []);
@@ -109,14 +128,14 @@ export function GameScene({
   useEffect(() => {
     if (gatheredAtTable && !wasGatheredRef.current) {
       wasGatheredRef.current = true;
-      setIsMyTurnToReveal(true);
+      if (mockMode) setMockRevealTurn(true);
     }
     if (!gatheredAtTable) {
       wasGatheredRef.current = false;
-      setIsMyTurnToReveal(false);
+      if (mockMode) setMockRevealTurn(false);
       setGeneralChatOpen(true);
     }
-  }, [gatheredAtTable]);
+  }, [gatheredAtTable, mockMode]);
 
   useEffect(() => {
     if (gameState === 'RECESS') {
@@ -130,8 +149,8 @@ export function GameScene({
     setPrivateChatPlayerId(null);
     usePrivateChatStore.getState().setActivePartner(null);
     onGatherAtTable();
-    setIsMyTurnToReveal(true);
-  }, [onGatherAtTable]);
+    if (mockMode) setMockRevealTurn(true);
+  }, [onGatherAtTable, mockMode]);
 
   const handleCallMeeting = useCallback(() => {
     if (gatheredAtTable || meetingAnnounce) return;
@@ -255,6 +274,12 @@ export function GameScene({
     (cardId: string) => {
       if (!isMyTurnToReveal) return;
 
+      // Live: server is authority — only send; hand/turn update arrives via WS.
+      if (!mockMode) {
+        onRevealCard?.(cardId);
+        return;
+      }
+
       const revealed = revealMyCard(cardId);
       if (!revealed) return;
 
@@ -272,10 +297,56 @@ export function GameScene({
           cardRevealLabel(revealed),
         );
       }
-      setIsMyTurnToReveal(false);
+      setMockRevealTurn(false);
     },
-    [isMyTurnToReveal, myProfile, onRevealCard, recordCardReveal, revealMyCard],
+    [
+      isMyTurnToReveal,
+      mockMode,
+      myProfile,
+      onRevealCard,
+      recordCardReveal,
+      revealMyCard,
+    ],
   );
+
+  const { send } = useWebSocket();
+
+  const handleVoteToBrig = useCallback(
+    (targetCharacterId: string) => {
+      if (mockMode) {
+        castVoteToBrig(targetCharacterId);
+        return;
+      }
+      send({
+        action: 'vote',
+        payload: { target_character_id: targetCharacterId },
+      });
+    },
+    [mockMode, castVoteToBrig, send],
+  );
+
+  const selfCharacterId = myProfile?.characterId ?? null;
+  const selfPlayer =
+    players.find((p) => p.id === (clientId ?? myProfile?.id)) ??
+    players.find((p) => p.characterId === selfCharacterId);
+  const selfAlive = selfPlayer?.is_alive !== false;
+  const selfInBrig = Boolean(
+    selfCharacterId && brigCharacterIds.includes(selfCharacterId),
+  );
+  const epiloguePhase = gameState === 'RESOLVE' || matchEnded;
+  const onConvoy = epiloguePhase && selfAlive && !selfInBrig;
+  const searching = gameState === 'INIT' && !rolesAssigned && !matchEnded;
+
+  const brigOutcomeLine = (() => {
+    if (!epilogueReport) return null;
+    const x = epilogueReport.synthetics_in_convoy;
+    const synthWord =
+      x === 1 ? 'Синтетик' : x >= 2 && x <= 4 ? 'Синтетика' : 'Синтетиков';
+    const won = (epilogueReport.winning_team ?? '').toUpperCase() === 'HUMAN';
+    return won
+      ? `Итог: победа людей. В Конвой проникло ${x} ${synthWord}.`
+      : `Итог: проигрыш. В Конвой проникло ${x} ${synthWord}.`;
+  })();
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-black text-bunker-text">
@@ -342,25 +413,20 @@ export function GameScene({
 
       <div className="pointer-events-none absolute inset-0 z-[35] bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.08)_50%)] bg-[length:100%_4px] opacity-25" />
 
-      {!(
-        privateChatPlayerId ||
-        (gatheredAtTable && gameState !== 'RECESS' && generalChatOpen)
-      ) && (
-        <div className="absolute left-4 top-4 z-[36] flex flex-wrap items-center gap-2">
-          <GameTopMenu
-            gameState={gameState}
-            connected={connected}
-            mockMode={mockMode}
-            roomId={roomId}
-            onLeave={onLeave}
-          />
-          {gatheredAtTable && gameState === 'RECESS' && (
-            <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
-              Нажмите на игрока — кулуары
-            </span>
-          )}
-        </div>
-      )}
+      <div className="pointer-events-auto absolute left-4 top-4 z-[36] flex flex-wrap items-start gap-2">
+        <GameTopMenu
+          gameState={gameState}
+          connected={connected}
+          mockMode={mockMode}
+          roomId={roomId}
+          onLeave={onLeave}
+        />
+        {gatheredAtTable && gameState === 'RECESS' && !privateChatPlayerId && (
+          <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
+            Нажмите на игрока — кулуары
+          </span>
+        )}
+      </div>
 
       {!gatheredAtTable && !walkEdit && (
         <BottomHand
@@ -393,7 +459,7 @@ export function GameScene({
         gatheredAtTable={gatheredAtTable}
         typing={typing.map((t) => t.sender)}
         onSendMessage={onSendChat}
-        onVoteToBrig={castVoteToBrig}
+        onVoteToBrig={handleVoteToBrig}
         votes={votes}
         clientId={clientId}
         mockMode={mockMode}
@@ -401,6 +467,29 @@ export function GameScene({
         onClosePanel={closeGeneralChat}
         onOpenPanel={openGeneralChat}
       />
+
+      {/* Поиск игроков до старта матча */}
+      {searching && <MatchmakingOverlay onLeave={onLeave} />}
+
+      {/* Карцер: чёрный экран сразу после изоляции (не только эпилог) */}
+      {selfInBrig && (
+        <BrigHoldScreen
+          waitingForConvoy={!matchEnded}
+          phaseDeadlineTs={epiloguePhase ? phaseDeadlineTs : null}
+          outcomeLine={brigOutcomeLine}
+          onLeave={onLeave}
+        />
+      )}
+
+      {/* Конвой: только живые не из карцера (leave → не «на борту») */}
+      {onConvoy && (
+        <EpilogueOverlay
+          boarding={!matchEnded}
+          phaseDeadlineTs={phaseDeadlineTs}
+          report={epilogueReport}
+          onLeave={onLeave}
+        />
+      )}
     </div>
   );
 }

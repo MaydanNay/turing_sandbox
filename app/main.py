@@ -14,6 +14,7 @@ from app.event_bus import event_bus
 from app.mock_agent import start_mock_agent_supervisor
 from app.redis_state import redis_store
 from app.routers import api_router
+from app.services.phase_machine import start_phase_scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
     pubsub_task = await manager.start_pubsub()
     event_bus_task = await event_bus.start_pubsub()
     supervisor = start_mock_agent_supervisor()
+    phase_scheduler = start_phase_scheduler()
     logger.info(
         "Turing Sandbox API up on %s:%s (CORS=%s)",
         settings.app_host,
@@ -37,6 +39,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        phase_scheduler.cancel()
         supervisor.cancel()
         event_bus_task.cancel()
         pubsub_task.cancel()

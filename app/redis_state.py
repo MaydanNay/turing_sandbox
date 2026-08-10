@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 ROOM_KEY = "bunker:room:{room_id}"
 EVENTS_KEY = "bunker:room:{room_id}:events"
 SESSION_KEY = "bunker:session:{session_id}:room"
+INVITE_KEY = "bunker:invite:{code}"
 PRIVATE_KEY = "bunker:room:{room_id}:private:{human_id}:{agent_id}"
 PRIVATE_PATTERN = "bunker:room:{room_id}:private:*"
 HAND_KEY = "bunker:room:{room_id}:hand:{client_id}"
 HAND_PATTERN = "bunker:room:{room_id}:hand:*"
+
+# Ambiguous-free invite alphabet
+_INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 ROLES = [
     "Врач",
@@ -113,17 +117,89 @@ class RedisStateStore:
                 state.room_id,
             )
         await self._touch_ttl(state.room_id, state.session_id)
+        if state.invite_code:
+            ttl = settings.room_ttl_seconds
+            if ttl > 0:
+                await self.redis.expire(self._invite_key(state.invite_code), ttl)
+            await self.redis.set(
+                self._invite_key(state.invite_code),
+                state.room_id,
+                ex=ttl if ttl > 0 else None,
+            )
 
-    async def ensure_room(self, room_id: str, session_id: str | None = None) -> RoomState:
+    def _invite_key(self, code: str) -> str:
+        return INVITE_KEY.format(code=code.upper())
+
+    async def allocate_invite_code(self, room_id: str, *, length: int = 6) -> str:
+        """Reserve a short invite code → room_id mapping (TTL follows room)."""
+        ttl = settings.room_ttl_seconds
+        for _ in range(40):
+            code = "".join(random.choice(_INVITE_ALPHABET) for _ in range(length))
+            key = self._invite_key(code)
+            ok = await self.redis.set(key, room_id, nx=True, ex=ttl if ttl > 0 else None)
+            if ok:
+                return code
+        raise RuntimeError("Could not allocate invite code")
+
+    async def resolve_invite_code(self, code: str) -> str | None:
+        raw = await self.redis.get(self._invite_key(code.strip()))
+        if raw is None:
+            return None
+        return str(raw)
+
+    async def ensure_room(
+        self,
+        room_id: str,
+        session_id: str | None = None,
+        *,
+        match_duration_minutes: int | None = None,
+        matchmaking_deadline_ts: float | None = None,
+        is_private: bool | None = None,
+        invite_code: str | None = None,
+        host_client_id: str | None = None,
+    ) -> RoomState:
         state = await self.get_room(room_id)
         if state is not None:
+            changed = False
             if session_id and not state.session_id:
                 state.session_id = session_id
+                changed = True
+            if (
+                match_duration_minutes is not None
+                and state.match_duration_minutes is None
+            ):
+                state.match_duration_minutes = match_duration_minutes
+                changed = True
+            if (
+                matchmaking_deadline_ts is not None
+                and state.matchmaking_deadline_ts is None
+            ):
+                state.matchmaking_deadline_ts = matchmaking_deadline_ts
+                changed = True
+            if is_private is True and not state.is_private:
+                state.is_private = True
+                changed = True
+            if invite_code and not state.invite_code:
+                state.invite_code = invite_code.upper()
+                changed = True
+            if host_client_id and not state.host_client_id:
+                state.host_client_id = host_client_id
+                changed = True
+            if changed:
                 await self.save_room(state)
             else:
                 await self._touch_ttl(room_id, state.session_id)
             return state
-        state = RoomState(room_id=room_id, session_id=session_id, phase=Phase.init)
+        state = RoomState(
+            room_id=room_id,
+            session_id=session_id,
+            phase=Phase.init,
+            match_duration_minutes=match_duration_minutes,
+            matchmaking_deadline_ts=matchmaking_deadline_ts,
+            is_private=bool(is_private),
+            invite_code=invite_code.upper() if invite_code else None,
+            host_client_id=host_client_id,
+        )
         await self.save_room(state)
         return state
 
@@ -145,16 +221,45 @@ class RedisStateStore:
             faction=existing.faction if existing else None,
             is_ai=is_ai if existing is None else existing.is_ai or is_ai,
             connected=connected,
+            is_alive=existing.is_alive if existing else True,
         )
         await self.save_room(state)
         return state
 
     async def mark_disconnected(self, room_id: str, client_id: str) -> RoomState | None:
+        """Network drop / socket close: connected=False only. Alive players may reconnect."""
         state = await self.get_room(room_id)
         if state is None or client_id not in state.players:
             return state
         player = state.players[client_id]
         state.players[client_id] = player.model_copy(update={"connected": False})
+        await self.save_room(state)
+        return state
+
+    async def abandon_player(self, room_id: str, client_id: str) -> RoomState | None:
+        """Explicit leave: out of convoy / match for this client (is_alive=False)."""
+        state = await self.get_room(room_id)
+        if state is None or client_id not in state.players:
+            return state
+
+        player = state.players[client_id]
+        if state.phase == Phase.finished:
+            state.players[client_id] = player.model_copy(update={"connected": False})
+            await self.save_room(state)
+            return state
+
+        state.players[client_id] = player.model_copy(
+            update={"connected": False, "is_alive": False}
+        )
+        if client_id in state.votes:
+            del state.votes[client_id]
+        if state.reveal_queue:
+            state.reveal_queue = [cid for cid in state.reveal_queue if cid != client_id]
+            if state.reveal_index >= len(state.reveal_queue):
+                state.reveal_queue = []
+                state.reveal_index = 0
+                state.reveal_deadline_ts = None
+                state.reveal_card_type = None
         await self.save_room(state)
         return state
 
@@ -177,6 +282,14 @@ class RedisStateStore:
             return state
 
         client_ids = list(state.players.keys())
+        # Prefer seating order: alive humans + AI only (safety if prune missed)
+        client_ids = [
+            cid
+            for cid in client_ids
+            if state.players[cid].is_ai or state.players[cid].is_alive
+        ]
+        if len(client_ids) > settings.room_capacity:
+            client_ids = client_ids[: settings.room_capacity]
         characters = list(CHARACTER_IDS)
         professions = list(ROLES)
         random.shuffle(characters)
@@ -193,8 +306,8 @@ class RedisStateStore:
         self._assign_factions(state)
 
         state.roles_assigned = True
-        if state.phase == Phase.init:
-            state.phase = Phase.pitch
+        # Phase clock is owned by phase_machine (Pitch + deadline); keep Init here
+        # only until start_match_from_init runs after deal.
         await self.save_room(state)
         logger.info(
             "Assigned characters room=%s mapping=%s factions=%s",
@@ -203,7 +316,10 @@ class RedisStateStore:
             {cid: (p.faction.value if p.faction else None) for cid, p in state.players.items()},
         )
         await self.deal_hands(room_id)
-        return await self.ensure_room(room_id)
+        from app.services.phase_machine import start_match_from_init
+
+        started = await start_match_from_init(room_id)
+        return started or await self.ensure_room(room_id)
 
     @staticmethod
     def _assign_factions(state: RoomState) -> None:
@@ -341,6 +457,15 @@ class RedisStateStore:
             out[key] = revealed
             out[client_id] = revealed
         return out
+
+    async def list_room_ids(self) -> list[str]:
+        """Active room ids from Redis keys `bunker:room:{id}` (not events/hands)."""
+        ids: list[str] = []
+        async for key in self.redis.scan_iter(match="bunker:room:*", count=100):
+            parts = str(key).split(":")
+            if len(parts) == 3 and parts[0] == "bunker" and parts[1] == "room":
+                ids.append(parts[2])
+        return ids
 
     async def append_event(self, room_id: str, event: dict[str, Any]) -> None:
         key = self._events_key(room_id)

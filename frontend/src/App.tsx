@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { finishSession, fetchSession } from '@/api/sessions';
+import { fetchSession } from '@/api/sessions';
 import { ChatToastStack } from '@/components/Chat/ChatToastStack';
 import { GameScene } from '@/components/GameScene';
 import { LobbyScreen } from '@/components/LobbyScreen';
 import { SessionHistoryScreen } from '@/components/SessionHistoryScreen';
 import { playChatSendSoundEffect } from '@/hooks/useGeneralChatEffects';
+import { useT } from '@/i18n';
 import { useWebSocket } from '@/providers/WebSocketProvider';
-import { useChatNotificationStore } from '@/store/chatNotificationStore';
 import { useGameStore } from '@/store/gameStore';
 import { useOutpostMovementStore } from '@/store/outpostMovementStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
@@ -23,25 +23,6 @@ import {
 } from '@/store/sessionPersistence';
 
 type AppMode = 'lobby' | 'history' | 'live';
-
-function pushMatchOutcomeToast(winningTeam: string | null | undefined): void {
-  const team = (winningTeam ?? '').toUpperCase();
-  if (team === 'HUMAN') {
-    useChatNotificationStore.getState().push({
-      kind: 'general',
-      title: 'Итог матча',
-      body: 'Люди победили — все синтетики в карцере.',
-    });
-    return;
-  }
-  if (team === 'SYNTHETICS') {
-    useChatNotificationStore.getState().push({
-      kind: 'general',
-      title: 'Итог матча',
-      body: 'Синтетики уцелели — не все инфильтраторы изолированы.',
-    });
-  }
-}
 
 function buildSnapshot(mode: PersistMode): UiSnapshot | null {
   const game = useGameStore.getState();
@@ -83,11 +64,20 @@ function hydrateOutpostFromSnapshot(snap: UiSnapshot | null): void {
 }
 
 export default function App() {
+  const t = useT();
   const [mode, setMode] = useState<AppMode>('lobby');
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [canContinue, setCanContinue] = useState(false);
   const [bootChecked, setBootChecked] = useState(false);
   const [lobbyError, setLobbyError] = useState<string | null>(null);
+  const [initialInviteCode, setInitialInviteCode] = useState<string | null>(() => {
+    try {
+      const raw = new URLSearchParams(window.location.search).get('invite');
+      return raw ? raw.trim().toUpperCase() : null;
+    } catch {
+      return null;
+    }
+  });
 
   const { connect, disconnect, send } = useWebSocket();
 
@@ -152,9 +142,19 @@ export default function App() {
   }, [mode]);
 
   const handleJoinLive = useCallback(
-    (rid: string, cid: string) => {
+    (rid: string, cid: string, options?: { seatToken?: string | null }) => {
       clearAllSessionPersistence();
       setLobbyError(null);
+      setInitialInviteCode(null);
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('invite')) {
+          url.searchParams.delete('invite');
+          window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+        }
+      } catch {
+        /* ignore */
+      }
       prepareLiveSession(rid, cid);
       saveActiveSession({
         mode: 'live',
@@ -162,7 +162,7 @@ export default function App() {
         clientId: cid,
         updatedAt: Date.now(),
       });
-      connect(rid, cid);
+      connect(rid, cid, { seatToken: options?.seatToken });
       setMode('live');
     },
     [connect, prepareLiveSession],
@@ -261,16 +261,13 @@ export default function App() {
 
     flushUiSnapshotSave(() => buildSnapshot('live'));
 
+    // Explicit leave → out of convoy; then disconnect (room keeps playing).
     if (mode === 'live' && rid) {
       try {
-        const isResolve = game.gameState === 'RESOLVE';
-        const result = await finishSession(rid, {
-          winningTeam: isResolve ? 'DRAW' : 'ABORTED',
-          brigAgents: game.brigCharacterIds,
-        });
-        pushMatchOutcomeToast(result.winning_team);
+        send({ action: 'leave' });
+        await new Promise((r) => window.setTimeout(r, 120));
       } catch {
-        // Still leave locally even if finish fails (room may already be gone)
+        // Still disconnect locally
       }
       disconnect();
     }
@@ -283,7 +280,7 @@ export default function App() {
     setCanContinue(false);
     setLobbyError(null);
     setMode('lobby');
-  }, [mode, disconnect]);
+  }, [mode, disconnect, send]);
 
   const handleSendChat = useCallback(
     (text: string) => {
@@ -330,7 +327,13 @@ export default function App() {
 
   if (mode === 'lobby') {
     if (!bootChecked) {
-      return <div className="min-h-screen bg-black" aria-busy aria-label="Загрузка сессии" />;
+      return (
+        <div
+          className="min-h-screen bg-black"
+          aria-busy
+          aria-label={t('lobby.loadingSession')}
+        />
+      );
     }
     return (
       <>
@@ -343,6 +346,7 @@ export default function App() {
           onOpenHistory={() => setMode('history')}
           canContinue={canContinue}
           error={lobbyError ?? error}
+          initialInviteCode={initialInviteCode}
         />
       </>
     );

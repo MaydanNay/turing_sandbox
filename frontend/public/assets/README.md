@@ -9,7 +9,7 @@ Vite отдаёт их как статику по URL `/assets/...`.
 ```
 public/assets/
 ├── locations/
-│   ├── локация.png              # Фон аванпоста (фаза INIT)
+│   ├── outpost.jpg              # Фон аванпоста
 │   └── menu.png                 # Главное меню — 1920×1080 (16:9)
 ├── table/
 │   ├── table.png                # Стол по центру

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,12 +12,16 @@ from app.db import get_db
 from app.models import GameEvent, GameSession, SessionStatus
 from app.redis_state import redis_store
 from app.schemas import (
+    MATCH_DURATION_CHOICES,
+    Phase,
+    SessionCreateRequest,
     SessionCreateResponse,
     SessionDetail,
     SessionEventItem,
     SessionEventsResponse,
     SessionFinishRequest,
     SessionFinishResponse,
+    SessionJoinRequest,
     SessionSummary,
     room_state_for_client,
 )
@@ -26,29 +30,136 @@ from app.services import finish_session
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
 
+def _ws_url(request: Request, room_id: str) -> str:
+    host = request.headers.get("host", "localhost:8000")
+    scheme = "wss" if request.url.scheme == "https" else "ws"
+    return f"{scheme}://{host}/ws/room/{room_id}/{{client_id}}"
+
+
 @router.post("", response_model=SessionCreateResponse)
 async def create_session(
     request: Request,
+    body: SessionCreateRequest = Body(default_factory=SessionCreateRequest),
     db: AsyncSession = Depends(get_db),
 ) -> SessionCreateResponse:
+    import time
+
+    minutes = int(body.match_duration_minutes)
+    if minutes not in MATCH_DURATION_CHOICES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"match_duration_minutes must be one of {list(MATCH_DURATION_CHOICES)}",
+        )
+
+    from app.config import settings
+    from app.services.matchmaking import find_open_matchmaking_room, reserve_lobby_seat
+
+    if body.private:
+        session = GameSession(id=uuid.uuid4(), status=SessionStatus.active)
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+
+        room_id = str(session.id)
+        invite_code = await redis_store.allocate_invite_code(room_id)
+        await redis_store.ensure_room(
+            room_id,
+            session_id=str(session.id),
+            match_duration_minutes=minutes,
+            matchmaking_deadline_ts=None,
+            is_private=True,
+            invite_code=invite_code,
+        )
+        seat_token = await reserve_lobby_seat(room_id)
+        if seat_token is None:
+            raise HTTPException(status_code=503, detail="Could not reserve seat")
+        return SessionCreateResponse(
+            session_id=session.id,
+            room_id=room_id,
+            status=session.status.value,
+            ws_url=_ws_url(request, room_id),
+            match_duration_minutes=minutes,
+            invite_code=invite_code,
+            is_private=True,
+            seat_token=seat_token,
+        )
+
+    existing = await find_open_matchmaking_room(minutes)
+    if existing is not None and existing.session_id:
+        room_id = existing.room_id
+        seat_token = await reserve_lobby_seat(room_id)
+        if seat_token is None:
+            # Race: room filled between find and reserve — fall through to new room
+            existing = None
+        else:
+            return SessionCreateResponse(
+                session_id=uuid.UUID(existing.session_id),
+                room_id=room_id,
+                status=SessionStatus.active.value,
+                ws_url=_ws_url(request, room_id),
+                match_duration_minutes=minutes,
+                is_private=False,
+                seat_token=seat_token,
+            )
+
     session = GameSession(id=uuid.uuid4(), status=SessionStatus.active)
     db.add(session)
     await db.commit()
     await db.refresh(session)
 
     room_id = str(session.id)
-    await redis_store.ensure_room(room_id, session_id=str(session.id))
-
-    host = request.headers.get("host", "localhost:8000")
-    # Prefer ws for local/MVP; Diana can upgrade to wss behind TLS
-    scheme = "wss" if request.url.scheme == "https" else "ws"
-    ws_url = f"{scheme}://{host}/ws/room/{room_id}/{{client_id}}"
+    deadline = time.time() + float(settings.matchmaking_seconds)
+    await redis_store.ensure_room(
+        room_id,
+        session_id=str(session.id),
+        match_duration_minutes=minutes,
+        matchmaking_deadline_ts=deadline,
+        is_private=False,
+    )
+    seat_token = await reserve_lobby_seat(room_id)
+    if seat_token is None:
+        raise HTTPException(status_code=503, detail="Could not reserve seat")
 
     return SessionCreateResponse(
         session_id=session.id,
         room_id=room_id,
         status=session.status.value,
-        ws_url=ws_url,
+        ws_url=_ws_url(request, room_id),
+        match_duration_minutes=minutes,
+        is_private=False,
+        seat_token=seat_token,
+    )
+
+
+@router.post("/join", response_model=SessionCreateResponse)
+async def join_session_by_invite(
+    request: Request,
+    body: SessionJoinRequest,
+) -> SessionCreateResponse:
+    from app.services.matchmaking import find_room_by_invite, reserve_lobby_seat
+
+    code = body.invite_code.strip().upper()
+    state = await find_room_by_invite(code)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Invite code not found")
+    if state.phase != Phase.init or state.roles_assigned:
+        raise HTTPException(status_code=409, detail="Match already started")
+    if not state.session_id:
+        raise HTTPException(status_code=500, detail="Room has no session")
+
+    seat_token = await reserve_lobby_seat(state.room_id)
+    if seat_token is None:
+        raise HTTPException(status_code=409, detail="Room is full")
+
+    return SessionCreateResponse(
+        session_id=uuid.UUID(state.session_id),
+        room_id=state.room_id,
+        status=SessionStatus.active.value,
+        ws_url=_ws_url(request, state.room_id),
+        match_duration_minutes=state.match_duration_minutes,
+        invite_code=state.invite_code,
+        is_private=True,
+        seat_token=seat_token,
     )
 
 

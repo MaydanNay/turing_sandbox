@@ -125,6 +125,7 @@ export function BrigGrid({ brigCharacterIds, players, onOpen }: BrigGridProps) {
         <div className={`flex items-center justify-between ${collapsed ? '' : 'mb-3'}`}>
           <p className="text-center font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-red-300">
             Карцер · {occupied}/{BRIG_CAPACITY}
+            {occupied >= BRIG_CAPACITY ? ' · до Конвоя' : ''}
           </p>
           <span className="ml-4 flex h-4 w-4 items-center justify-center rounded-sm text-[10px] text-red-400">
             {collapsed ? '▼' : '▲'}

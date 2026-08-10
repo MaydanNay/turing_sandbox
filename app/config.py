@@ -19,12 +19,24 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     min_human_players: int = 1
     room_capacity: int = 8
+    # Isolation slots; survivors board the convoy (capacity - brig = 5)
+    brig_capacity: int = 3
+    convoy_seats: int = 5
+    # RESOLVE boarding window after convoy arrives (seconds, before phase scale)
+    convoy_boarding_seconds: int = 180
     # How many AI seats are SYNTHETIC (rest of AI seats + all humans = HUMAN).
     # Agents never see this in Helixa prompts — system/dataset only.
     synthetic_count: int = 2
     # Refreshed on every room write / event append
     room_ttl_seconds: int = 86400
     history_event_limit: int = 200
+
+    # Match phase clock (see app/services/phase_machine.py)
+    # 1.0 = full design lengths; 0.2 ≈ 84s Pitch instead of 7m (good for local playtests)
+    phase_duration_scale: float = 0.2
+    phase_scheduler_interval_seconds: float = 1.0
+    # Wait for other humans before filling AI seats (matchmaking screen)
+    matchmaking_seconds: float = 45.0
 
     # Helixa game-agent (private chat / кулуары)
     helixa_base_url: str = "http://localhost:8000"

@@ -1,25 +1,42 @@
 import { Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { createSession } from '@/api/sessions';
+import { createSession, joinSessionByInvite } from '@/api/sessions';
 import { playUiSound } from '@/audio/uiSounds';
 import { ASSETS } from '@/config/assets';
 import { generateClientId } from '@/config/env';
+import { useT } from '@/i18n';
+import { useSettingsStore, type AppLanguage } from '@/store/settingsStore';
 
 interface LobbyScreenProps {
-  onJoinLive: (roomId: string, clientId: string) => void;
+  onJoinLive: (
+    roomId: string,
+    clientId: string,
+    options?: { seatToken?: string | null },
+  ) => void;
   onContinue?: () => void;
   onOpenHistory?: () => void;
   canContinue?: boolean;
   error: string | null;
+  /** Prefill join-code view (e.g. from ?invite=) */
+  initialInviteCode?: string | null;
 }
 
-type MenuAction = 'continue' | 'new_game' | 'history';
+type MenuAction =
+  | 'continue'
+  | 'new_game'
+  | 'create_room'
+  | 'join_code'
+  | 'history'
+  | 'settings';
+type LobbyView = 'main' | 'new_game' | 'create_room' | 'join_code' | 'settings';
 
-interface MenuItem {
+type MenuItem = {
   id: MenuAction;
   label: string;
-}
+};
+
+export type MatchDurationMinutes = 7 | 15 | 30;
 
 function MenuDiamond({ active }: { active: boolean }) {
   return (
@@ -37,23 +54,22 @@ function MenuDiamond({ active }: { active: boolean }) {
 function MenuRow({
   label,
   selected,
-  loading,
-  onSelect,
   onHover,
+  onSelect,
 }: {
   label: string;
   selected: boolean;
-  loading?: boolean;
-  onSelect: () => void;
   onHover: () => void;
+  onSelect: () => void;
 }) {
   return (
     <button
       type="button"
-      onClick={onSelect}
       onMouseEnter={onHover}
-      disabled={loading}
-      className="group relative flex w-full items-center justify-end gap-4 py-1.5 text-right focus:outline-none disabled:cursor-wait"
+      onClick={onSelect}
+      className={`group relative flex w-full items-center justify-end gap-3 py-2.5 pr-1 text-right focus:outline-none ${
+        selected ? 'text-white' : 'text-white/70 hover:text-white/90'
+      }`}
     >
       <span
         className={`pointer-events-none absolute inset-y-0 -left-6 right-0 transition-all duration-200 sm:-left-10 ${
@@ -63,22 +79,105 @@ function MenuRow({
         }`}
         aria-hidden
       />
+      <span className="relative z-10 flex items-center gap-3">
+        <MenuDiamond active={selected} />
+        <span className="font-menu text-2xl font-light tracking-[0.06em] sm:text-3xl">
+          {label}
+        </span>
+      </span>
+    </button>
+  );
+}
 
-      <MenuDiamond active={selected} />
+function ModePicker({
+  modeIndex,
+  setModeIndex,
+  loadingLive,
+  modes,
+}: {
+  modeIndex: number;
+  setModeIndex: (i: number) => void;
+  loadingLive: boolean;
+  modes: { minutes: MatchDurationMinutes; title: string; subtitle: string }[];
+}) {
+  return (
+    <ul className="flex w-full flex-col items-end gap-2">
+      {modes.map((mode, index) => {
+        const selected = modeIndex === index;
+        return (
+          <li key={mode.minutes} className="w-full">
+            <button
+              type="button"
+              disabled={loadingLive}
+              onMouseEnter={() => {
+                if (modeIndex !== index) {
+                  playUiSound('character');
+                  setModeIndex(index);
+                }
+              }}
+              onClick={() => {
+                playUiSound('character');
+                setModeIndex(index);
+              }}
+              className={`group relative flex w-full flex-col items-end gap-0.5 py-2 pr-1 text-right focus:outline-none disabled:cursor-wait ${
+                selected ? 'text-white' : 'text-white/65 hover:text-white/85'
+              }`}
+            >
+              <span
+                className={`pointer-events-none absolute inset-y-0 -left-6 right-0 transition-all duration-200 sm:-left-10 ${
+                  selected
+                    ? 'bg-gradient-to-l from-amber-300/35 via-amber-200/20 to-transparent'
+                    : 'bg-transparent'
+                }`}
+                aria-hidden
+              />
+              <span className="relative z-10 flex items-center gap-3">
+                <MenuDiamond active={selected} />
+                <span className="font-menu text-xl font-light tracking-[0.06em] sm:text-2xl">
+                  {mode.title}
+                </span>
+              </span>
+              <span className="relative z-10 font-mono text-[10px] uppercase tracking-wider text-white/45">
+                {mode.subtitle}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
+function LanguageOption({
+  active,
+  label,
+  onSelect,
+}: {
+  active: boolean;
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`group relative flex w-full items-center justify-end gap-3 py-2.5 pr-1 text-right focus:outline-none ${
+        active ? 'text-white' : 'text-white/65 hover:text-white/85'
+      }`}
+    >
       <span
-        className={`relative z-10 min-w-[9rem] font-menu text-xl font-light tracking-[0.06em] transition-colors duration-200 sm:min-w-[11rem] sm:text-2xl ${
-          selected ? 'text-white' : 'text-white/72 group-hover:text-white/90'
+        className={`pointer-events-none absolute inset-y-0 -left-6 right-0 transition-all duration-200 sm:-left-10 ${
+          active
+            ? 'bg-gradient-to-l from-amber-300/35 via-amber-200/20 to-transparent'
+            : 'bg-transparent'
         }`}
-      >
-        {loading ? (
-          <span className="inline-flex items-center justify-end gap-2">
-            <Loader2 className="h-4 w-4 animate-spin text-amber-200" />
-            Connecting…
-          </span>
-        ) : (
-          label
-        )}
+        aria-hidden
+      />
+      <span className="relative z-10 flex items-center gap-3">
+        <MenuDiamond active={active} />
+        <span className="font-menu text-xl font-light tracking-[0.06em] sm:text-2xl">
+          {label}
+        </span>
       </span>
     </button>
   );
@@ -90,23 +189,127 @@ export function LobbyScreen({
   onOpenHistory,
   canContinue = false,
   error,
+  initialInviteCode = null,
 }: LobbyScreenProps) {
+  const t = useT();
+  const language = useSettingsStore((s) => s.language);
+  const setLanguage = useSettingsStore((s) => s.setLanguage);
+
+  const matchModes = useMemo(
+    () =>
+      [
+        { minutes: 7 as const, title: t('mode.quick'), subtitle: t('mode.quickSub') },
+        { minutes: 15 as const, title: t('mode.medium'), subtitle: t('mode.mediumSub') },
+        { minutes: 30 as const, title: t('mode.long'), subtitle: t('mode.longSub') },
+      ] as const,
+    [t],
+  );
+
   const menuItems = useMemo<MenuItem[]>(() => {
     const items: MenuItem[] = [];
-    if (canContinue) items.push({ id: 'continue', label: 'Continue' });
-    items.push({ id: 'new_game', label: 'New Game' }, { id: 'history', label: 'History' });
+    if (canContinue) items.push({ id: 'continue', label: t('menu.continue') });
+    items.push(
+      { id: 'new_game', label: t('menu.newGame') },
+      { id: 'create_room', label: t('menu.createRoom') },
+      { id: 'join_code', label: t('menu.joinCode') },
+      { id: 'settings', label: t('menu.settings') },
+      { id: 'history', label: t('menu.history') },
+    );
     return items;
-  }, [canContinue]);
+  }, [canContinue, t]);
 
+  const [view, setView] = useState<LobbyView>(
+    initialInviteCode ? 'join_code' : 'main',
+  );
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [modeIndex, setModeIndex] = useState(1);
   const [loadingLive, setLoadingLive] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [inviteInput, setInviteInput] = useState(
+    (initialInviteCode ?? '').toUpperCase(),
+  );
 
   const displayError = error ?? localError;
+  const selectedMode = matchModes[modeIndex] ?? matchModes[1]!;
 
   useEffect(() => {
     setSelectedIndex(0);
-  }, [canContinue]);
+  }, [canContinue, language]);
+
+  useEffect(() => {
+    if (initialInviteCode) {
+      setInviteInput(initialInviteCode.toUpperCase());
+      setView('join_code');
+    }
+  }, [initialInviteCode]);
+
+  const startPublicMatch = useCallback(
+    async (minutes: MatchDurationMinutes) => {
+      setLoadingLive(true);
+      setLocalError(null);
+      try {
+        const clientId = generateClientId();
+        const session = await createSession({ matchDurationMinutes: minutes });
+        onJoinLive(session.room_id, clientId, { seatToken: session.seat_token });
+      } catch (e) {
+        setLocalError(
+          e instanceof Error ? e.message : t('lobby.connectionFailed'),
+        );
+      } finally {
+        setLoadingLive(false);
+      }
+    },
+    [onJoinLive, t],
+  );
+
+  const startPrivateRoom = useCallback(
+    async (minutes: MatchDurationMinutes) => {
+      setLoadingLive(true);
+      setLocalError(null);
+      try {
+        const clientId = generateClientId();
+        const session = await createSession({
+          matchDurationMinutes: minutes,
+          private: true,
+        });
+        onJoinLive(session.room_id, clientId, { seatToken: session.seat_token });
+      } catch (e) {
+        setLocalError(
+          e instanceof Error ? e.message : t('lobby.connectionFailed'),
+        );
+      } finally {
+        setLoadingLive(false);
+      }
+    },
+    [onJoinLive, t],
+  );
+
+  const joinByCode = useCallback(async () => {
+    const code = inviteInput.trim().toUpperCase();
+    if (code.length < 4) {
+      setLocalError(t('lobby.enterCode'));
+      return;
+    }
+    setLoadingLive(true);
+    setLocalError(null);
+    try {
+      const clientId = generateClientId();
+      const session = await joinSessionByInvite(code);
+      onJoinLive(session.room_id, clientId, { seatToken: session.seat_token });
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : t('lobby.joinFailed'));
+    } finally {
+      setLoadingLive(false);
+    }
+  }, [inviteInput, onJoinLive, t]);
+
+  const pickLanguage = useCallback(
+    (next: AppLanguage) => {
+      playUiSound('character');
+      setLanguage(next);
+    },
+    [setLanguage],
+  );
 
   const runAction = useCallback(
     async (action: MenuAction) => {
@@ -122,24 +325,96 @@ export function LobbyScreen({
         return;
       }
 
-      setLoadingLive(true);
-      setLocalError(null);
-      try {
-        const clientId = generateClientId();
-        const session = await createSession();
-        onJoinLive(session.room_id, clientId);
-      } catch (e) {
-        setLocalError(e instanceof Error ? e.message : 'Connection failed');
-      } finally {
-        setLoadingLive(false);
+      if (action === 'settings') {
+        setView('settings');
+        setLocalError(null);
+        return;
+      }
+
+      if (action === 'new_game') {
+        setView('new_game');
+        setLocalError(null);
+        return;
+      }
+
+      if (action === 'create_room') {
+        setView('create_room');
+        setLocalError(null);
+        return;
+      }
+
+      if (action === 'join_code') {
+        setView('join_code');
+        setLocalError(null);
       }
     },
-    [onJoinLive, onContinue, onOpenHistory],
+    [onContinue, onOpenHistory],
   );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (loadingLive) return;
+
+      if (view === 'settings') {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setView('main');
+          return;
+        }
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          pickLanguage(language === 'en' ? 'ru' : 'en');
+          return;
+        }
+        return;
+      }
+
+      if (view === 'join_code') {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setView('main');
+          return;
+        }
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          void joinByCode();
+        }
+        return;
+      }
+
+      if (view === 'new_game' || view === 'create_room') {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setView('main');
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setModeIndex((i) => {
+            const next = (i - 1 + matchModes.length) % matchModes.length;
+            playUiSound('character');
+            return next;
+          });
+          return;
+        }
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setModeIndex((i) => {
+            const next = (i + 1) % matchModes.length;
+            playUiSound('character');
+            return next;
+          });
+          return;
+        }
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          const mode = matchModes[modeIndex];
+          if (!mode) return;
+          if (view === 'create_room') void startPrivateRoom(mode.minutes);
+          else void startPublicMatch(mode.minutes);
+        }
+        return;
+      }
 
       if (event.key === 'ArrowUp') {
         event.preventDefault();
@@ -164,7 +439,24 @@ export function LobbyScreen({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loadingLive, runAction, selectedIndex, menuItems]);
+  }, [
+    loadingLive,
+    runAction,
+    selectedIndex,
+    menuItems,
+    view,
+    modeIndex,
+    startPublicMatch,
+    startPrivateRoom,
+    joinByCode,
+    matchModes,
+    language,
+    pickLanguage,
+  ]);
+
+  const modeTitle =
+    view === 'create_room' ? t('lobby.createRoomTitle') : t('lobby.matchMode');
+  const startLabel = view === 'create_room' ? t('lobby.create') : t('lobby.start');
 
   return (
     <div className="relative h-full min-h-screen w-full overflow-hidden bg-black text-white">
@@ -201,33 +493,169 @@ export function LobbyScreen({
         </div>
 
         <nav
-          className="absolute right-8 top-[42%] w-[min(92vw,320px)] -translate-y-1/2 sm:right-12 sm:w-[min(40vw,360px)] md:right-16 lg:right-20"
+          className="absolute right-8 top-[42%] w-[min(92vw,340px)] -translate-y-1/2 sm:right-12 sm:w-[min(42vw,380px)] md:right-16 lg:right-20"
           aria-label="Main menu"
         >
-          <ul className="flex flex-col items-end gap-3 sm:gap-4">
-            {menuItems.map((item, index) => (
-              <li key={item.id} className="w-full">
-                <MenuRow
-                  label={item.label}
-                  selected={selectedIndex === index}
-                  loading={item.id === 'new_game' && loadingLive}
-                  onHover={() => {
-                    if (selectedIndex !== index) {
-                      playUiSound('character');
+          {view === 'main' ? (
+            <ul className="flex flex-col items-end gap-3 sm:gap-4">
+              {menuItems.map((item, index) => (
+                <li key={item.id} className="w-full">
+                  <MenuRow
+                    label={item.label}
+                    selected={selectedIndex === index}
+                    onHover={() => {
+                      if (selectedIndex !== index) {
+                        playUiSound('character');
+                        setSelectedIndex(index);
+                      }
+                    }}
+                    onSelect={() => {
                       setSelectedIndex(index);
+                      void runAction(item.id);
+                    }}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : view === 'settings' ? (
+            <div className="flex flex-col items-end gap-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200/80">
+                {t('settings.title')}
+              </p>
+              <p className="max-w-[16rem] text-right font-mono text-[10px] leading-relaxed text-white/45">
+                {t('settings.languageHint')}
+              </p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
+                {t('settings.language')}
+              </p>
+              <ul className="flex w-full flex-col items-end gap-1">
+                <li className="w-full">
+                  <LanguageOption
+                    active={language === 'en'}
+                    label={t('settings.english')}
+                    onSelect={() => pickLanguage('en')}
+                  />
+                </li>
+                <li className="w-full">
+                  <LanguageOption
+                    active={language === 'ru'}
+                    label={t('settings.russian')}
+                    onSelect={() => pickLanguage('ru')}
+                  />
+                </li>
+              </ul>
+              <button
+                type="button"
+                onClick={() => {
+                  playUiSound('character');
+                  setView('main');
+                }}
+                className="mt-2 font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
+              >
+                {t('menu.back')}
+              </button>
+            </div>
+          ) : view === 'join_code' ? (
+            <div className="flex flex-col items-end gap-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200/80">
+                {t('lobby.roomCode')}
+              </p>
+              <input
+                value={inviteInput}
+                onChange={(e) =>
+                  setInviteInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
+                }
+                maxLength={8}
+                placeholder="XXXXXX"
+                autoFocus
+                className="w-full rounded-md border border-white/20 bg-black/50 px-4 py-3 text-center font-mono text-2xl tracking-[0.35em] text-amber-50 placeholder:text-white/25 focus:border-amber-300/50 focus:outline-none"
+              />
+              <div className="mt-2 flex w-full flex-col items-end gap-2">
+                <button
+                  type="button"
+                  disabled={loadingLive}
+                  onClick={() => {
+                    playUiSound('table');
+                    void joinByCode();
+                  }}
+                  className="inline-flex min-w-[11rem] items-center justify-center gap-2 rounded-md border border-amber-300/45 bg-amber-500/15 px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-500/25 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {loadingLive ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {t('lobby.joining')}
+                    </>
+                  ) : (
+                    t('lobby.join')
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={loadingLive}
+                  onClick={() => {
+                    playUiSound('character');
+                    setView('main');
+                  }}
+                  className="font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
+                >
+                  {t('menu.back')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-end gap-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200/80">
+                {modeTitle}
+              </p>
+              <ModePicker
+                modeIndex={modeIndex}
+                setModeIndex={setModeIndex}
+                loadingLive={loadingLive}
+                modes={[...matchModes]}
+              />
+
+              <div className="mt-2 flex w-full flex-col items-end gap-2">
+                <button
+                  type="button"
+                  disabled={loadingLive}
+                  onClick={() => {
+                    playUiSound('table');
+                    if (view === 'create_room') {
+                      void startPrivateRoom(selectedMode.minutes);
+                    } else {
+                      void startPublicMatch(selectedMode.minutes);
                     }
                   }}
-                  onSelect={() => {
-                    setSelectedIndex(index);
-                    void runAction(item.id);
+                  className="inline-flex min-w-[11rem] items-center justify-center gap-2 rounded-md border border-amber-300/45 bg-amber-500/15 px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-500/25 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {loadingLive ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {t('lobby.starting')}
+                    </>
+                  ) : (
+                    startLabel
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={loadingLive}
+                  onClick={() => {
+                    playUiSound('character');
+                    setView('main');
                   }}
-                />
-              </li>
-            ))}
-          </ul>
+                  className="font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
+                >
+                  {t('menu.back')}
+                </button>
+              </div>
+            </div>
+          )}
 
           {displayError && (
-            <p className="mt-6 text-right font-mono text-xs text-red-300/90">{displayError}</p>
+            <p className="mt-6 text-right font-mono text-xs text-red-300/90">
+              {displayError}
+            </p>
           )}
         </nav>
 
