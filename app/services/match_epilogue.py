@@ -21,7 +21,11 @@ def _now_iso() -> str:
 
 
 def build_epilogue_report(state: RoomState) -> dict[str, Any]:
-    """Who boarded the Convoy vs Brig; win = zero SYNTHETIC in convoy."""
+    """Who boarded the Convoy vs Brig.
+
+    Win condition (humans): synthetics_in_convoy == 0.
+    Any Synthetic on board (≥1) → SYNTHETICS win / human loss.
+    """
     brig_set = set(state.brig_character_ids)
     player_ids = list(state.players.keys())
 

@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import { useDeadlineCountdown } from '@/hooks/usePhaseCountdown';
+import { useStagedLobbyFill } from '@/hooks/useStagedLobbyFill';
 import { useT } from '@/i18n';
 import { useWebSocket } from '@/providers/WebSocketProvider';
 import { useGameStore } from '@/store/gameStore';
@@ -41,6 +42,13 @@ export function MatchmakingOverlay({ onLeave }: MatchmakingOverlayProps) {
   ).length;
   const capacity = 8;
   const isHost = Boolean(clientId && hostClientId && clientId === hostClientId);
+
+  const { displayCount, lastJoinName } = useStagedLobbyFill(
+    humanCount,
+    capacity,
+    remaining,
+    isPrivate ? null : matchmakingDeadlineTs,
+  );
 
   const copy = useCallback(async (kind: 'code' | 'link', value: string) => {
     try {
@@ -157,8 +165,16 @@ export function MatchmakingOverlay({ onLeave }: MatchmakingOverlayProps) {
         <p className="mt-8 font-mono text-sm text-neutral-300">
           {t('mm.inRoom')}{' '}
           <span className="text-amber-100">
-            {humanCount}/{capacity}
+            {displayCount}/{capacity}
           </span>
+        </p>
+        <p
+          className={`mt-3 h-5 font-mono text-[11px] uppercase tracking-wider transition ${
+            lastJoinName ? 'text-emerald-300/80 opacity-100' : 'opacity-0'
+          }`}
+          aria-live="polite"
+        >
+          {lastJoinName ? `${t('mm.joined')}: ${lastJoinName}` : '·'}
         </p>
       </div>
 

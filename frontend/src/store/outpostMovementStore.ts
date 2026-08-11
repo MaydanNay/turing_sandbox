@@ -5,6 +5,7 @@ import {
   ensureOutsideFurniture,
   findOutpostPath,
   getOutpostObstacles,
+  lastWalkableAlongRay,
   pointInWalkable,
   pushOutOfObstacles,
   standUpSpawnForSeat,
@@ -85,7 +86,12 @@ interface OutpostMovementState {
     playerId: string,
     x: number,
     y: number,
-    opts?: { passThroughSeat?: number; preciseTiming?: boolean },
+    opts?: {
+      passThroughSeat?: number;
+      preciseTiming?: boolean;
+      /** WASD: clamp along ray, no pathfinding detours */
+      directAlongRay?: boolean;
+    },
   ) => void;
   /**
    * Continuous WASD steer: aim a short walkable point in `dir` from current feet.
@@ -117,6 +123,12 @@ function safeSpawnPos(tablePosition: number): OutpostPos {
     y: point.y,
     scale: preferred.scale,
   };
+}
+
+/** Keep movement scale in sync with standing-spot layout (editor saves). */
+function withSpotScale(pos: OutpostPos, tablePosition: number): OutpostPos {
+  const spot = getOutpostSpot(tablePosition + 1);
+  return { ...pos, scale: spot.scale };
 }
 
 function sanitizePos(pos: OutpostPos): OutpostPos {
@@ -179,10 +191,12 @@ export const useOutpostMovementStore = create<OutpostMovementState>((set, get) =
     let changed = false;
     for (const p of players) {
       if (next[p.id]) {
-        const cleaned = sanitizePos(next[p.id]!);
+        const cleaned = withSpotScale(sanitizePos(next[p.id]!), p.tablePosition);
+        const prev = next[p.id]!;
         if (
-          Math.abs(cleaned.x - next[p.id]!.x) > 0.05 ||
-          Math.abs(cleaned.y - next[p.id]!.y) > 0.05
+          Math.abs(cleaned.x - prev.x) > 0.05 ||
+          Math.abs(cleaned.y - prev.y) > 0.05 ||
+          Math.abs(cleaned.scale - prev.scale) > 0.001
         ) {
           next[p.id] = cleaned;
           changed = true;
@@ -283,15 +297,35 @@ export const useOutpostMovementStore = create<OutpostMovementState>((set, get) =
       (prev ? { x: prev.x, y: prev.y } : { x, y });
     const from = pushOutOfObstacles(feet, obstacles);
 
-    const goal =
-      opts?.passThroughSeat != null
-        ? { x, y }
-        : pushOutOfObstacles({ x, y }, obstacles);
+    let waypoints: { x: number; y: number }[];
 
-    let waypoints = findOutpostPath(from, goal, optsWithDyn);
-    if (waypoints.length === 0) {
-      // Keep current walk — a failed repath must not freeze mid-step
-      return;
+    if (opts?.directAlongRay) {
+      const goal = lastWalkableAlongRay(from, { x, y }, obstacles);
+      if (dist(from.x, from.y, goal.x, goal.y) <= NEAR_EPS) {
+        const { [playerId]: _drop, ...restAnim } = state.moveAnim;
+        set({
+          positions: {
+            ...state.positions,
+            [playerId]: { x: from.x, y: from.y, scale },
+          },
+          remainingPath: { ...state.remainingPath, [playerId]: [] },
+          inMotion: { ...state.inMotion, [playerId]: false },
+          moveAnim: restAnim,
+        });
+        return;
+      }
+      waypoints = [goal];
+    } else {
+      const goal =
+        opts?.passThroughSeat != null
+          ? { x, y }
+          : pushOutOfObstacles({ x, y }, obstacles);
+
+      waypoints = findOutpostPath(from, goal, optsWithDyn);
+      if (waypoints.length === 0) {
+        // Keep current walk — a failed repath must not freeze mid-step
+        return;
+      }
     }
 
     // Drop micro leading points so the sprite still gets a real move / complete event
@@ -352,7 +386,10 @@ export const useOutpostMovementStore = create<OutpostMovementState>((set, get) =
       x: feet.x + nx * STEER_LOOKAHEAD_PCT,
       y: feet.y + ny * STEER_LOOKAHEAD_PCT,
     };
-    get().setTarget(playerId, goal.x, goal.y, { preciseTiming: true });
+    get().setTarget(playerId, goal.x, goal.y, {
+      preciseTiming: true,
+      directAlongRay: true,
+    });
     const state = get();
     const pos = state.positions[playerId];
     if (!pos) return null;

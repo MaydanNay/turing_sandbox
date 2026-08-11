@@ -119,6 +119,7 @@ export interface BackendRoomState {
   brig_character_ids?: string[];
   votes?: Record<string, string>;
   vote_open?: boolean;
+  vote_deadline_ts?: number | null;
   reveal_queue?: string[];
   reveal_index?: number;
   reveal_deadline_ts?: number | null;

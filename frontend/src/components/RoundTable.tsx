@@ -108,11 +108,14 @@ export function RoundTable({
   const seatedSet = useMemo(() => new Set(seatedPlayerIds), [seatedPlayerIds]);
   const selfIsSeated = Boolean(selfId && seatedSet.has(selfId));
 
+  const pendingFloorWalkRef = useRef<{ x: number; y: number } | null>(null);
+
   useEffect(() => {
     if (gatheredAtTable) {
       resetMovement();
       wasGatheredRef.current = true;
       setClickMarker(null);
+      pendingFloorWalkRef.current = null;
       return;
     }
     const hasPositions =
@@ -120,6 +123,12 @@ export function RoundTable({
     if (wasGatheredRef.current || !hasPositions) {
       respawnOutsideFurniture(players);
       wasGatheredRef.current = false;
+      const pending = pendingFloorWalkRef.current;
+      pendingFloorWalkRef.current = null;
+      if (pending && selfId) {
+        setTarget(selfId, pending.x, pending.y);
+        send({ action: 'move_to', payload: { x: pending.x, y: pending.y } });
+      }
       return;
     }
     initFromPlayers(players);
@@ -127,10 +136,13 @@ export function RoundTable({
   }, [
     gatheredAtTable,
     players,
+    selfId,
     initFromPlayers,
     respawnOutsideFurniture,
     resetMovement,
     sanitizeAllPositions,
+    setTarget,
+    send,
   ]);
 
   // AI wander on outpost — DELETED (now driven by backend sync)
@@ -175,13 +187,24 @@ export function RoundTable({
 
   const handleFloorClick = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      if (gatheredAtTable || !selfId) return;
+      if (!selfId) return;
       const rect = event.currentTarget.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
       const x = ((event.clientX - rect.left) / rect.width) * 100;
       const y = ((event.clientY - rect.top) / rect.height) * 100;
       if (!isWalkableOutpostPoint({ x, y })) return;
       const clamped = clampPlayerClick({ x, y });
+
+      // Full meeting: leave table, then walk to the click after respawn
+      if (gatheredAtTable) {
+        if (!onLeaveTable) return;
+        playUiSound('table');
+        const id = ++markerSeq.current;
+        setClickMarker({ x: clamped.x, y: clamped.y, id });
+        pendingFloorWalkRef.current = { x: clamped.x, y: clamped.y };
+        onLeaveTable();
+        return;
+      }
 
       if (seatedSet.has(selfId)) {
         onStandSelf?.(selfId);
@@ -206,6 +229,7 @@ export function RoundTable({
       setTarget,
       clearPendingSit,
       onStandSelf,
+      onLeaveTable,
       send,
     ],
   );
@@ -403,10 +427,10 @@ export function RoundTable({
         if (!player) return [];
         if (seatedSet.has(player.id)) return [];
         const live = positions[player.id];
-        const fallback = getOutpostSpot(character.seat);
+        const spot = getOutpostSpot(character.seat);
         const layout: SeatLayout = live
-          ? { x: live.x, y: live.y, scale: live.scale }
-          : fallback;
+          ? { x: live.x, y: live.y, scale: spot.scale }
+          : spot;
         return [{ character, player, layout }];
       })
     : [];
@@ -438,20 +462,21 @@ export function RoundTable({
         className="absolute inset-0 h-full w-full"
       />
 
-      <SceneObjectsLayer />
+      <SceneObjectsLayer interactive={!gatheredAtTable} />
 
-      {!gatheredAtTable && (
-        <button
-          type="button"
-          className={`pointer-events-auto absolute inset-0 z-[1] bg-transparent focus:outline-none ${
-            floorWalkCursor ? 'cursor-pointer' : 'cursor-default'
-          }`}
-          aria-label="Идти"
-          onClick={handleFloorClick}
-          onMouseMove={handleFloorCursorMove}
-          onMouseLeave={() => setFloorWalkCursor(false)}
-        />
-      )}
+      {/* Floor click: walk, or stand up from a personal seat / leave the meeting */}
+      <button
+        type="button"
+        className={`pointer-events-auto absolute inset-0 z-[1] bg-transparent focus:outline-none ${
+          floorWalkCursor ? 'cursor-pointer' : 'cursor-default'
+        }`}
+        aria-label={
+          gatheredAtTable || selfIsSeated ? 'Встать и идти' : 'Идти'
+        }
+        onClick={handleFloorClick}
+        onMouseMove={handleFloorCursorMove}
+        onMouseLeave={() => setFloorWalkCursor(false)}
+      />
 
       {clickMarker && (
         <FloorClickMarker

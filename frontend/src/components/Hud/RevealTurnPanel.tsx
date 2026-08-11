@@ -132,20 +132,28 @@ export function RevealTurnPanel({
           </div>
 
           <div className="flex shrink-0 items-end gap-5 overflow-x-auto pt-4 pb-1 sm:gap-6">
-            {displayCards.map((card, index) => (
-              <RevealPickCard
-                key={card.id}
-                card={card}
-                disabled={card.isRevealed || inspectOpen}
-                hidden={selectedCardId === card.id}
-                isRaised={!inspectOpen && hoveredIndex === index}
-                onSelect={setSelectedCardId}
-                onHoverStart={() => setHoveredIndex(index)}
-                onHoverEnd={() =>
-                  setHoveredIndex((cur) => (cur === index ? null : cur))
-                }
-              />
-            ))}
+            {displayCards.length === 0 ? (
+              <p className="max-w-[14rem] pb-6 text-left text-xs leading-relaxed text-amber-100/70">
+                {requiredType
+                  ? 'Карта для вскрытия ещё не загрузилась. Подождите секунду или обновите страницу (Continue).'
+                  : 'Рука пуста — карты не пришли с сервера.'}
+              </p>
+            ) : (
+              displayCards.map((card, index) => (
+                <RevealPickCard
+                  key={card.id}
+                  card={card}
+                  disabled={card.isRevealed || inspectOpen}
+                  hidden={selectedCardId === card.id}
+                  isRaised={!inspectOpen && hoveredIndex === index}
+                  onSelect={setSelectedCardId}
+                  onHoverStart={() => setHoveredIndex(index)}
+                  onHoverEnd={() =>
+                    setHoveredIndex((cur) => (cur === index ? null : cur))
+                  }
+                />
+              ))
+            )}
           </div>
         </div>
       </motion.div>

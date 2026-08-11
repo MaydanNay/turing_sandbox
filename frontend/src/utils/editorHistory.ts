@@ -1,4 +1,8 @@
 import { cloneFurnitureLayout, type FurnitureLayout } from '@/data/outpostFurniture';
+import {
+  cloneStandingSpots,
+  type StandingSpot,
+} from '@/data/outpostStandingSpots';
 import type { SceneObjectPlacement } from '@/data/outpostSceneObjects';
 import type { WalkPoint } from '@/data/outpostWalkMask';
 
@@ -8,6 +12,7 @@ export interface EditorHistorySnapshot {
   draft: WalkPoint[];
   objects: SceneObjectPlacement[];
   furniture: FurnitureLayout;
+  standingSpots: StandingSpot[];
 }
 
 const MAX_HISTORY = 80;
@@ -25,6 +30,7 @@ export function cloneEditorSnapshot(
     draft: snap.draft.map((p) => ({ ...p })),
     objects: snap.objects.map((o) => ({ ...o })),
     furniture: cloneFurnitureLayout(snap.furniture),
+    standingSpots: cloneStandingSpots(snap.standingSpots),
   };
 }
 

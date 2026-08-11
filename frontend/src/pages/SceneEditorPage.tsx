@@ -6,6 +6,7 @@ import { SceneObjectsLayer } from '@/components/SceneObjectsLayer';
 import { WalkEditorOverlay } from '@/components/WalkEditorOverlay';
 import { ASSETS } from '@/config/assets';
 import {
+  getEditorMode,
   getEditorShowPlayers,
   getEditorUiVersion,
   subscribeEditorUi,
@@ -15,6 +16,8 @@ import {
 export function SceneEditorPage() {
   useSyncExternalStore(subscribeEditorUi, getEditorUiVersion, getEditorUiVersion);
   const showPlayers = getEditorShowPlayers();
+  const editorMode = getEditorMode();
+  const showCharacters = editorMode === 'characters' && showPlayers;
 
   if (!import.meta.env.DEV) {
     return (
@@ -36,7 +39,7 @@ export function SceneEditorPage() {
             draggable={false}
           />
           <SceneObjectsLayer />
-          <OutpostEditorStage showPlayers={showPlayers} />
+          <OutpostEditorStage showPlayers={showCharacters} />
           <WalkEditorOverlay />
         </div>
       </SceneCoverFrame>

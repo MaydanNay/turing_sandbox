@@ -6,6 +6,7 @@ import { playUiSound, refreshUiSoundMaster } from '@/audio/uiSounds';
 import { ASSETS } from '@/config/assets';
 import { generateClientId } from '@/config/env';
 import { useT } from '@/i18n';
+import type { TranslationKey } from '@/i18n/types';
 import { useSettingsStore, type AppLanguage } from '@/store/settingsStore';
 
 interface LobbyScreenProps {
@@ -25,18 +26,47 @@ interface LobbyScreenProps {
 type MenuAction =
   | 'continue'
   | 'new_game'
-  | 'create_room'
-  | 'join_code'
+  | 'with_friend'
   | 'history'
   | 'settings';
-type LobbyView = 'main' | 'new_game' | 'create_room' | 'join_code' | 'settings';
+type LobbyView =
+  | 'main'
+  | 'new_game'
+  | 'with_friend'
+  | 'create_room'
+  | 'join_code'
+  | 'settings';
 
 type MenuItem = {
   id: MenuAction;
   label: string;
 };
 
+type FriendHubAction = 'create_room' | 'join_room';
+
+type FriendHubItem = {
+  id: FriendHubAction;
+  label: string;
+};
+
 export type MatchDurationMinutes = 7 | 15 | 30;
+
+function formatLobbyError(
+  raw: string | null,
+  t: (key: TranslationKey) => string,
+): string | null {
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('load failed') ||
+    lower.includes('network request failed')
+  ) {
+    return t('lobby.backendDown');
+  }
+  return raw;
+}
 
 function MenuDiamond({ active }: { active: boolean }) {
   return (
@@ -143,38 +173,73 @@ function ModePicker({
   );
 }
 
-function LanguageOption({
-  active,
-  label,
-  onSelect,
+function LanguageDropdown({
+  value,
+  open,
+  onOpenChange,
+  onChange,
+  labelEn,
+  labelRu,
 }: {
-  active: boolean;
-  label: string;
-  onSelect: () => void;
+  value: AppLanguage;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChange: (language: AppLanguage) => void;
+  labelEn: string;
+  labelRu: string;
 }) {
+  const label = value === 'en' ? labelEn : labelRu;
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`group relative flex w-full items-center justify-end gap-3 py-2.5 pr-1 text-right focus:outline-none ${
-        active ? 'text-white' : 'text-white/65 hover:text-white/85'
-      }`}
-    >
-      <span
-        className={`pointer-events-none absolute inset-y-0 -left-6 right-0 transition-all duration-200 sm:-left-10 ${
-          active
-            ? 'bg-gradient-to-l from-amber-300/35 via-amber-200/20 to-transparent'
-            : 'bg-transparent'
+    <div className="relative w-full max-w-[260px] self-end">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => {
+          playUiSound('character');
+          onOpenChange(!open);
+        }}
+        className={`flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 font-mono text-[11px] uppercase tracking-wider transition ${
+          open
+            ? 'border-amber-300/50 bg-amber-500/15 text-amber-100'
+            : 'border-white/20 bg-black/40 text-amber-50 hover:border-amber-300/35'
         }`}
-        aria-hidden
-      />
-      <span className="relative z-10 flex items-center gap-3">
-        <MenuDiamond active={active} />
-        <span className="font-menu text-xl font-light tracking-[0.06em] sm:text-2xl">
-          {label}
-        </span>
-      </span>
-    </button>
+      >
+        <span>{label}</span>
+        <span aria-hidden>{open ? '▴' : '▾'}</span>
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute right-0 top-[calc(100%+4px)] z-30 w-full overflow-hidden rounded-md border border-amber-300/35 bg-black/95 py-1 shadow-xl backdrop-blur-md"
+        >
+          {(
+            [
+              ['en', labelEn],
+              ['ru', labelRu],
+            ] as const
+          ).map(([code, text]) => (
+            <li key={code}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={value === code}
+                className={`block w-full px-3 py-2 text-left font-mono text-[11px] uppercase tracking-wider transition hover:bg-white/10 ${
+                  value === code ? 'text-amber-200' : 'text-white/70'
+                }`}
+                onClick={() => {
+                  playUiSound('character');
+                  onChange(code);
+                  onOpenChange(false);
+                }}
+              >
+                {text}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -209,26 +274,38 @@ export function LobbyScreen({
     if (canContinue) items.push({ id: 'continue', label: t('menu.continue') });
     items.push(
       { id: 'new_game', label: t('menu.newGame') },
-      { id: 'create_room', label: t('menu.createRoom') },
-      { id: 'join_code', label: t('menu.joinCode') },
+      { id: 'with_friend', label: t('menu.withFriend') },
       { id: 'settings', label: t('menu.settings') },
       { id: 'history', label: t('menu.history') },
     );
     return items;
   }, [canContinue, t]);
 
+  const friendHubItems = useMemo<FriendHubItem[]>(
+    () => [
+      { id: 'create_room', label: t('menu.createRoom') },
+      { id: 'join_room', label: t('menu.joinRoom') },
+    ],
+    [t],
+  );
+
   const [view, setView] = useState<LobbyView>(
     initialInviteCode ? 'join_code' : 'main',
   );
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [friendHubIndex, setFriendHubIndex] = useState(0);
   const [modeIndex, setModeIndex] = useState(1);
   const [loadingLive, setLoadingLive] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [inviteInput, setInviteInput] = useState(
     (initialInviteCode ?? '').toUpperCase(),
   );
+  const [draftLanguage, setDraftLanguage] = useState<AppLanguage>(language);
+  const [draftSoundEnabled, setDraftSoundEnabled] = useState(soundEnabled);
+  const [draftSoundVolume, setDraftSoundVolume] = useState(soundVolume);
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
 
-  const displayError = error ?? localError;
+  const displayError = formatLobbyError(error ?? localError, t);
   const selectedMode = matchModes[modeIndex] ?? matchModes[1]!;
 
   useEffect(() => {
@@ -302,13 +379,49 @@ export function LobbyScreen({
     }
   }, [inviteInput, onJoinLive, t]);
 
-  const pickLanguage = useCallback(
-    (next: AppLanguage) => {
-      playUiSound('character');
-      setLanguage(next);
-    },
-    [setLanguage],
-  );
+  useEffect(() => {
+    if (view !== 'settings') return;
+    const s = useSettingsStore.getState();
+    setDraftLanguage(s.language);
+    setDraftSoundEnabled(s.soundEnabled);
+    setDraftSoundVolume(s.soundVolume);
+    setLangMenuOpen(false);
+  }, [view]);
+
+  const leaveSettings = useCallback((commit: boolean) => {
+    if (commit) {
+      setLanguage(draftLanguage);
+      setSoundEnabled(draftSoundEnabled);
+      setSoundVolume(draftSoundVolume);
+      refreshUiSoundMaster();
+    }
+    setLangMenuOpen(false);
+    setView('main');
+  }, [
+    draftLanguage,
+    draftSoundEnabled,
+    draftSoundVolume,
+    setLanguage,
+    setSoundEnabled,
+    setSoundVolume,
+  ]);
+
+  const playSettingsTestSound = useCallback(() => {
+    const committed = useSettingsStore.getState();
+    useSettingsStore.setState({
+      soundEnabled: draftSoundEnabled,
+      soundVolume: draftSoundVolume,
+    });
+    refreshUiSoundMaster();
+    playUiSound('table');
+    window.setTimeout(() => {
+      useSettingsStore.setState({
+        soundEnabled: committed.soundEnabled,
+        soundVolume: committed.soundVolume,
+      });
+      refreshUiSoundMaster();
+    }, 250);
+  }, [draftSoundEnabled, draftSoundVolume]);
 
   const runAction = useCallback(
     async (action: MenuAction) => {
@@ -336,19 +449,25 @@ export function LobbyScreen({
         return;
       }
 
-      if (action === 'create_room') {
-        setView('create_room');
+      if (action === 'with_friend') {
+        setFriendHubIndex(0);
+        setView('with_friend');
         setLocalError(null);
         return;
-      }
-
-      if (action === 'join_code') {
-        setView('join_code');
-        setLocalError(null);
       }
     },
     [onContinue, onOpenHistory],
   );
+
+  const openFriendHubAction = useCallback((action: FriendHubAction) => {
+    playUiSound('table');
+    setLocalError(null);
+    if (action === 'create_room') {
+      setView('create_room');
+      return;
+    }
+    setView('join_code');
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -357,12 +476,20 @@ export function LobbyScreen({
       if (view === 'settings') {
         if (event.key === 'Escape') {
           event.preventDefault();
-          setView('main');
+          playUiSound('character');
+          leaveSettings(false);
+          return;
+        }
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          playUiSound('table');
+          leaveSettings(true);
           return;
         }
         if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
           event.preventDefault();
-          pickLanguage(language === 'en' ? 'ru' : 'en');
+          playUiSound('character');
+          setDraftLanguage((prev) => (prev === 'en' ? 'ru' : 'en'));
           return;
         }
         return;
@@ -371,7 +498,8 @@ export function LobbyScreen({
       if (view === 'join_code') {
         if (event.key === 'Escape') {
           event.preventDefault();
-          setView('main');
+          playUiSound('character');
+          setView('with_friend');
           return;
         }
         if (event.key === 'Enter') {
@@ -381,10 +509,44 @@ export function LobbyScreen({
         return;
       }
 
+      if (view === 'with_friend') {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          playUiSound('character');
+          setView('main');
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setFriendHubIndex((i) => {
+            const next = (i - 1 + friendHubItems.length) % friendHubItems.length;
+            playUiSound('character');
+            return next;
+          });
+          return;
+        }
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setFriendHubIndex((i) => {
+            const next = (i + 1) % friendHubItems.length;
+            playUiSound('character');
+            return next;
+          });
+          return;
+        }
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          const item = friendHubItems[friendHubIndex];
+          if (item) openFriendHubAction(item.id);
+        }
+        return;
+      }
+
       if (view === 'new_game' || view === 'create_room') {
         if (event.key === 'Escape') {
           event.preventDefault();
-          setView('main');
+          playUiSound('character');
+          setView(view === 'create_room' ? 'with_friend' : 'main');
           return;
         }
         if (event.key === 'ArrowUp') {
@@ -449,8 +611,11 @@ export function LobbyScreen({
     startPrivateRoom,
     joinByCode,
     matchModes,
-    language,
-    pickLanguage,
+    leaveSettings,
+    draftLanguage,
+    friendHubItems,
+    friendHubIndex,
+    openFriendHubAction,
   ]);
 
   const modeTitle =
@@ -529,22 +694,14 @@ export function LobbyScreen({
               <p className="shrink-0 font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
                 {t('settings.language')}
               </p>
-              <ul className="flex w-full shrink-0 flex-col items-end gap-0.5">
-                <li className="w-full">
-                  <LanguageOption
-                    active={language === 'en'}
-                    label={t('settings.english')}
-                    onSelect={() => pickLanguage('en')}
-                  />
-                </li>
-                <li className="w-full">
-                  <LanguageOption
-                    active={language === 'ru'}
-                    label={t('settings.russian')}
-                    onSelect={() => pickLanguage('ru')}
-                  />
-                </li>
-              </ul>
+              <LanguageDropdown
+                value={draftLanguage}
+                open={langMenuOpen}
+                onOpenChange={setLangMenuOpen}
+                onChange={setDraftLanguage}
+                labelEn={t('settings.english')}
+                labelRu={t('settings.russian')}
+              />
 
               <div className="mt-1 w-full shrink-0 border-t border-white/10 pt-3">
                 <p className="text-right font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
@@ -555,12 +712,11 @@ export function LobbyScreen({
                   <button
                     type="button"
                     onClick={() => {
-                      setSoundEnabled(true);
-                      refreshUiSoundMaster();
+                      setDraftSoundEnabled(true);
                       playUiSound('character');
                     }}
                     className={`rounded-md border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider transition ${
-                      soundEnabled
+                      draftSoundEnabled
                         ? 'border-amber-300/45 bg-amber-500/20 text-amber-100'
                         : 'border-white/15 bg-white/5 text-white/50 hover:text-white/80'
                     }`}
@@ -569,12 +725,9 @@ export function LobbyScreen({
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setSoundEnabled(false);
-                      refreshUiSoundMaster();
-                    }}
+                    onClick={() => setDraftSoundEnabled(false)}
                     className={`rounded-md border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider transition ${
-                      !soundEnabled
+                      !draftSoundEnabled
                         ? 'border-amber-300/45 bg-amber-500/20 text-amber-100'
                         : 'border-white/15 bg-white/5 text-white/50 hover:text-white/80'
                     }`}
@@ -585,25 +738,23 @@ export function LobbyScreen({
 
                 <label className="mt-3 flex w-full flex-col items-end gap-1.5">
                   <span className="font-mono text-[10px] uppercase tracking-wider text-white/45">
-                    {t('settings.volume')} · {Math.round(soundVolume * 100)}%
+                    {t('settings.volume')} · {Math.round(draftSoundVolume * 100)}%
                   </span>
                   <input
                     type="range"
                     min={0}
                     max={100}
                     step={1}
-                    value={Math.round(soundVolume * 100)}
-                    disabled={!soundEnabled}
+                    value={Math.round(draftSoundVolume * 100)}
+                    disabled={!draftSoundEnabled}
                     onChange={(e) => {
-                      const next = Number(e.target.value) / 100;
-                      setSoundVolume(next);
-                      refreshUiSoundMaster();
+                      setDraftSoundVolume(Number(e.target.value) / 100);
                     }}
                     onMouseUp={() => {
-                      if (soundEnabled) playUiSound('table');
+                      if (draftSoundEnabled) playSettingsTestSound();
                     }}
                     onTouchEnd={() => {
-                      if (soundEnabled) playUiSound('table');
+                      if (draftSoundEnabled) playSettingsTestSound();
                     }}
                     className="h-1.5 w-full max-w-[260px] cursor-pointer appearance-none rounded-full bg-white/15 accent-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
                   />
@@ -611,28 +762,43 @@ export function LobbyScreen({
 
                 <button
                   type="button"
-                  disabled={!soundEnabled || soundVolume <= 0}
-                  onClick={() => playUiSound('table')}
+                  disabled={!draftSoundEnabled || draftSoundVolume <= 0}
+                  onClick={playSettingsTestSound}
                   className="mt-2 font-mono text-[10px] uppercase tracking-wider text-amber-200/70 transition hover:text-amber-100 disabled:opacity-30"
                 >
                   {t('settings.testSound')}
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  playUiSound('character');
-                  setView('main');
-                }}
-                className="mt-auto shrink-0 pt-3 font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
-              >
-                {t('menu.back')}
-              </button>
+              <div className="mt-auto flex w-full shrink-0 flex-row flex-wrap items-center justify-end gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playUiSound('table');
+                    leaveSettings(true);
+                  }}
+                  className="inline-flex min-w-[11rem] items-center justify-center gap-2 rounded-md border border-amber-300/45 bg-amber-500/15 px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-amber-100 transition hover:bg-amber-500/25"
+                >
+                  {t('settings.save')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playUiSound('character');
+                    leaveSettings(false);
+                  }}
+                  className="font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
+                >
+                  {t('menu.back')}
+                </button>
+              </div>
             </div>
           ) : view === 'join_code' ? (
             <div className="flex flex-col items-end gap-4">
               <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200/80">
+                {t('menu.joinRoom')}
+              </p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
                 {t('lobby.roomCode')}
               </p>
               <input
@@ -645,7 +811,7 @@ export function LobbyScreen({
                 autoFocus
                 className="w-full rounded-md border border-white/20 bg-black/50 px-4 py-3 text-center font-mono text-2xl tracking-[0.35em] text-amber-50 placeholder:text-white/25 focus:border-amber-300/50 focus:outline-none"
               />
-              <div className="mt-2 flex w-full flex-col items-end gap-2">
+              <div className="mt-2 flex w-full flex-row flex-wrap items-center justify-end gap-3">
                 <button
                   type="button"
                   disabled={loadingLive}
@@ -669,13 +835,49 @@ export function LobbyScreen({
                   disabled={loadingLive}
                   onClick={() => {
                     playUiSound('character');
-                    setView('main');
+                    setView('with_friend');
                   }}
                   className="font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
                 >
                   {t('menu.back')}
                 </button>
               </div>
+            </div>
+          ) : view === 'with_friend' ? (
+            <div className="flex flex-col items-end gap-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200/80">
+                {t('lobby.withFriendTitle')}
+              </p>
+              <ul className="flex w-full flex-col items-end gap-3 sm:gap-4">
+                {friendHubItems.map((item, index) => (
+                  <li key={item.id} className="w-full">
+                    <MenuRow
+                      label={item.label}
+                      selected={friendHubIndex === index}
+                      onHover={() => {
+                        if (friendHubIndex !== index) {
+                          playUiSound('character');
+                          setFriendHubIndex(index);
+                        }
+                      }}
+                      onSelect={() => {
+                        setFriendHubIndex(index);
+                        openFriendHubAction(item.id);
+                      }}
+                    />
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                onClick={() => {
+                  playUiSound('character');
+                  setView('main');
+                }}
+                className="mt-2 font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
+              >
+                {t('menu.back')}
+              </button>
             </div>
           ) : (
             <div className="flex flex-col items-end gap-4">
@@ -689,7 +891,7 @@ export function LobbyScreen({
                 modes={[...matchModes]}
               />
 
-              <div className="mt-5 flex w-full flex-col items-end gap-2">
+              <div className="mt-5 flex w-full flex-row flex-wrap items-center justify-end gap-3">
                 <button
                   type="button"
                   disabled={loadingLive}
@@ -717,7 +919,7 @@ export function LobbyScreen({
                   disabled={loadingLive}
                   onClick={() => {
                     playUiSound('character');
-                    setView('main');
+                    setView(view === 'create_room' ? 'with_friend' : 'main');
                   }}
                   className="font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
                 >

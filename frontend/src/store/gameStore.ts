@@ -28,6 +28,7 @@ import { clampSuspicion } from '@/utils/seatPositions';
 import { standUpSpawnForSeat } from '@/utils/outpostCollision';
 import { useChatNotificationStore } from '@/store/chatNotificationStore';
 import { useOutpostMovementStore } from '@/store/outpostMovementStore';
+import { useStationMissionStore } from '@/store/stationMissionStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import type { UiSnapshot } from '@/store/sessionPersistence';
 import { loadUiSnapshot } from '@/store/sessionPersistence';
@@ -252,6 +253,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     usePrivateChatStore.getState().reset();
     usePrivateChatStore.getState().setLiveMode(true);
     useChatNotificationStore.setState({ items: [] });
+    useStationMissionStore.getState().resetMatch();
     set({
       roomId,
       clientId,
@@ -476,7 +478,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
         } else if (msg.action === 'move_to' && msg.client_id !== myProfile?.id) {
           const payload = msg.payload as { x?: number; y?: number } | null;
           if (payload && typeof payload.x === 'number' && typeof payload.y === 'number') {
-            useOutpostMovementStore.getState().setTarget(msg.client_id, payload.x, payload.y);
+            const move = useOutpostMovementStore.getState();
+            if (!move.positions[msg.client_id]) {
+              move.initFromPlayers(
+                get().players.map((p) => ({
+                  id: p.id,
+                  characterId: p.characterId,
+                  tablePosition: p.tablePosition,
+                })),
+              );
+            }
+            useOutpostMovementStore
+              .getState()
+              .setTarget(msg.client_id, payload.x, payload.y);
           }
           break; // Do not add chat message for movement
         }
@@ -533,6 +547,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
       case 'error':
         set({ error: msg.text });
+        if (typeof msg.text === 'string' && msg.text.startsWith('vote denied:')) {
+          const voterId = get().clientId ?? get().myProfile?.id;
+          if (voterId && get().votes[voterId]) {
+            const next = { ...get().votes };
+            delete next[voterId];
+            set({ votes: next });
+          }
+          get().addChatMessage({
+            sender: 'Система',
+            text: `>>> Голос не принят: ${msg.text.replace(/^vote denied:\s*/, '')}`,
+            kind: 'system',
+            timestamp: msg.ts,
+          });
+        }
         break;
       case 'private_chat_typing':
         usePrivateChatStore
@@ -729,6 +757,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const meta = getPhaseMeta(phase);
 
     useOutpostMovementStore.getState().reset();
+    useStationMissionStore.getState().close();
 
     set({ gatheredAtTable: true, seatedPlayerIds: [], gameState: phase });
     get().addChatMessage({

@@ -29,6 +29,10 @@ REVEAL_CARD_BY_PHASE: dict[Phase, str] = {
 VOTE_PHASES = {Phase.conflict, Phase.revision, Phase.turing}
 BASE_VOTE_WINDOW_SECONDS = 60.0
 BASE_REVEAL_TURN_SECONDS = 45.0
+# Isolation rounds while Convoy waits on the pad (RESOLVE)
+BOARDING_VOTE_SECONDS = 45.0
+# Let clients see «Конвой прибыл» before bots burn the first vote cycle
+BOARDING_ARRIVAL_GRACE_SECONDS = 6.0
 _MIN_WINDOW = 8.0
 
 
@@ -105,6 +109,68 @@ def clear_reveal(state: RoomState) -> None:
 def clear_votes(state: RoomState) -> None:
     state.votes = {}
     state.vote_open = False
+    state.vote_deadline_ts = None
+
+
+def _boarding_elapsed_seconds(state: RoomState) -> float:
+    """Seconds since RESOLVE started (approx from deadline − designed duration)."""
+    if state.phase_deadline_ts is None:
+        return 999.0
+    from app.services.phase_machine import duration_seconds
+
+    total = duration_seconds(Phase.resolve, state)
+    remaining = state.phase_deadline_ts - time.time()
+    return max(0.0, total - remaining)
+
+
+async def open_vote_round(
+    room_id: str,
+    state: RoomState,
+    *,
+    window_seconds: float | None = None,
+) -> RoomState:
+    """Open (or reopen) a vote window; optional short boarding cycle."""
+    if window_seconds is not None:
+        rem = (
+            (state.phase_deadline_ts - time.time())
+            if state.phase_deadline_ts is not None
+            else float(window_seconds)
+        )
+        # Not enough boarding time left — let phase-end finalize handle it
+        if rem < _MIN_WINDOW:
+            logger.info(
+                "skip vote round room=%s rem=%.1f (boarding nearly over)",
+                room_id,
+                rem,
+            )
+            return state
+        capped = min(float(window_seconds), max(_MIN_WINDOW, rem - 0.5))
+        capped = max(_MIN_WINDOW, capped)
+        vote_deadline = time.time() + capped
+        if state.phase_deadline_ts is not None:
+            vote_deadline = min(vote_deadline, state.phase_deadline_ts)
+        state.vote_deadline_ts = vote_deadline
+    else:
+        state.vote_deadline_ts = state.phase_deadline_ts
+
+    state.votes = {}
+    state.vote_open = True
+    await redis_store.save_room(state)
+    msg = {
+        "type": "vote_opened",
+        "room_id": room_id,
+        "deadline_ts": state.vote_deadline_ts,
+        "state": room_state_for_client(state),
+        "ts": _now_iso(),
+    }
+    await _broadcast(room_id, msg, action_type="vote_opened")
+    logger.info(
+        "vote opened room=%s phase=%s deadline=%s",
+        room_id,
+        state.phase.value,
+        state.vote_deadline_ts,
+    )
+    return state
 
 
 async def on_phase_enter(room_id: str, state: RoomState) -> RoomState:
@@ -126,6 +192,7 @@ async def on_phase_enter(room_id: str, state: RoomState) -> RoomState:
     await redis_store.save_room(state)
     if state.reveal_queue:
         await broadcast_reveal_turn(room_id, state)
+    # RESOLVE: first vote opens after BOARDING_ARRIVAL_GRACE (see tick_match_flow)
     return state
 
 
@@ -145,6 +212,11 @@ async def broadcast_reveal_turn(room_id: str, state: RoomState) -> None:
         "ts": _now_iso(),
     }
     await _broadcast(room_id, msg, action_type="reveal_turn")
+    # Ensure the active human has their hand (deal may have happened while already connected)
+    if current and player and not player.is_ai:
+        from app.services.hand_push import push_hand_to_client
+
+        await push_hand_to_client(room_id, current)
 
 
 async def advance_reveal(
@@ -246,7 +318,7 @@ async def resolve_votes(room_id: str, state: RoomState) -> RoomState:
     if not tied and top:
         winner = top[0][0]
 
-    # Full brig isolates seats only — never ends the match early
+    # Isolate on majority; early match end is only during RESOLVE (boarding)
     if (
         winner
         and winner not in state.brig_character_ids
@@ -329,6 +401,9 @@ async def autofill_bot_votes(room_id: str, state: RoomState) -> RoomState:
 
 async def sync_vote_window(room_id: str, state: RoomState) -> RoomState:
     """Open vote window in the last N seconds of CONFLICT/REVISION/TURING."""
+    if state.phase == Phase.resolve:
+        # Boarding isolation cycles are handled by sync_boarding_votes
+        return state
     if state.phase not in VOTE_PHASES:
         if state.vote_open:
             clear_votes(state)
@@ -344,18 +419,46 @@ async def sync_vote_window(room_id: str, state: RoomState) -> RoomState:
     if should_open and not state.vote_open:
         # Close reveal if still running — voting takes over the table
         clear_reveal(state)
-        state.votes = {}
-        state.vote_open = True
-        await redis_store.save_room(state)
-        msg = {
-            "type": "vote_opened",
-            "room_id": room_id,
-            "deadline_ts": state.phase_deadline_ts,
-            "state": room_state_for_client(state),
-            "ts": _now_iso(),
-        }
-        await _broadcast(room_id, msg, action_type="vote_opened")
-        logger.info("vote opened room=%s remaining=%.1f", room_id, remaining)
+        state = await open_vote_round(room_id, state, window_seconds=None)
+    return state
+
+
+async def sync_boarding_votes(room_id: str, state: RoomState) -> RoomState:
+    """RESOLVE: resolve/reopen isolation rounds until brig full or timer ends.
+
+    Assumes a vote round is already open when needed (see tick_match_flow).
+    Convoy leaves early when brig hits capacity (A+B).
+    """
+    if state.phase != Phase.resolve:
+        return state
+
+    if len(state.brig_character_ids) >= settings.brig_capacity:
+        if state.vote_open or state.votes:
+            clear_votes(state)
+            await redis_store.save_room(state)
+        return state
+
+    if state.phase_deadline_ts is not None and time.time() >= state.phase_deadline_ts:
+        return state
+
+    if not state.vote_open:
+        return state
+
+    alive = _alive_players(state)
+    all_voted = bool(alive) and all(cid in state.votes for cid, _ in alive)
+    timed_out = (
+        state.vote_deadline_ts is not None and time.time() >= state.vote_deadline_ts
+    )
+    if not all_voted and not timed_out:
+        return state
+
+    state = await resolve_votes(room_id, state)
+    if len(state.brig_character_ids) >= settings.brig_capacity:
+        return state
+    if state.phase_deadline_ts is not None and time.time() < state.phase_deadline_ts:
+        return await open_vote_round(
+            room_id, state, window_seconds=BOARDING_VOTE_SECONDS
+        )
     return state
 
 
@@ -438,7 +541,7 @@ async def force_reveal_or_skip(room_id: str, state: RoomState) -> RoomState:
 
 
 async def tick_match_flow(room_id: str, state: RoomState) -> RoomState:
-    """Per-second hooks: reveal timeout, vote window, bot votes."""
+    """Per-second hooks: reveal timeout, vote window, boarding votes, bot votes."""
     # Reveal timeout (only while vote is closed)
     if (
         not state.vote_open
@@ -449,8 +552,23 @@ async def tick_match_flow(room_id: str, state: RoomState) -> RoomState:
         state = await force_reveal_or_skip(room_id, state)
 
     state = await sync_vote_window(room_id, state)
+    # Open boarding round after arrival grace so splash ≠ missed first vote
+    if (
+        state.phase == Phase.resolve
+        and not state.vote_open
+        and len(state.brig_character_ids) < settings.brig_capacity
+        and (
+            state.phase_deadline_ts is None
+            or time.time() < state.phase_deadline_ts
+        )
+        and _boarding_elapsed_seconds(state) >= BOARDING_ARRIVAL_GRACE_SECONDS
+    ):
+        state = await open_vote_round(
+            room_id, state, window_seconds=BOARDING_VOTE_SECONDS
+        )
     if state.vote_open:
         state = await autofill_bot_votes(room_id, state)
+    state = await sync_boarding_votes(room_id, state)
     return state
 
 

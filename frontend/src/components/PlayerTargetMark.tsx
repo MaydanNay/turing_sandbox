@@ -41,7 +41,7 @@ export function PlayerFootOval({ tone }: { tone: PlayerMarkTone }) {
   return (
     <div
       aria-hidden
-      className={`pointer-events-none absolute bottom-[-8%] left-1/2 z-0 h-[11%] w-[78%] -translate-x-1/2 rounded-[50%] transition-[opacity,transform,background-color,box-shadow] duration-150 ease-out ${OVAL[tone]}`}
+      className={`pointer-events-none absolute bottom-[-3.5%] left-[54%] z-0 h-[11%] w-[78%] -translate-x-1/2 rounded-[50%] transition-[opacity,transform,background-color,box-shadow] duration-150 ease-out ${OVAL[tone]}`}
     />
   );
 }
@@ -51,7 +51,7 @@ export function SelfPlayerMarker() {
   return (
     <div
       aria-hidden
-      className="pointer-events-none absolute left-1/2 top-[-2%] z-[2] -translate-x-1/2 -translate-y-full"
+      className="pointer-events-none absolute left-1/2 top-[-16%] z-[2] -translate-x-1/2 -translate-y-full"
     >
       <div className="animate-self-marker text-[10px] leading-none text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)] sm:text-[11px]">
         ▼

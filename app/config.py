@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     phase_duration_scale: float = 0.2
     phase_scheduler_interval_seconds: float = 1.0
     # Wait for other humans before filling AI seats (matchmaking screen)
-    matchmaking_seconds: float = 45.0
+    matchmaking_seconds: float = 30.0
 
     # Helixa game-agent (private chat / кулуары)
     helixa_base_url: str = "http://localhost:8000"

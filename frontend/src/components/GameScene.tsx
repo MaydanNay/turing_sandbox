@@ -13,6 +13,7 @@ import { MeetingAnnouncement } from '@/components/MeetingAnnouncement';
 import { PrivateChatOverlay } from '@/components/PrivateChat';
 import { RoundTable } from '@/components/RoundTable';
 import { SceneCoverFrame } from '@/components/SceneCoverFrame';
+import { StationMissionHost } from '@/components/StationMission/StationMissionHost';
 import { TableMeetingModal } from '@/components/TableMeetingModal';
 import { useGeneralChatEffects } from '@/hooks/useGeneralChatEffects';
 import { cardRevealLabel } from '@/utils/cardLabel';
@@ -315,12 +316,19 @@ export function GameScene({
         castVoteToBrig(targetCharacterId);
         return;
       }
+      const voterId = clientId ?? myProfile?.id;
+      if (voterId) {
+        // Optimistic: lock the button until server confirms / rejects
+        useGameStore.setState((s) => ({
+          votes: { ...s.votes, [voterId]: targetCharacterId },
+        }));
+      }
       send({
         action: 'vote',
         payload: { target_character_id: targetCharacterId },
       });
     },
-    [mockMode, castVoteToBrig, send],
+    [mockMode, castVoteToBrig, send, clientId, myProfile?.id],
   );
 
   const selfCharacterId = myProfile?.characterId ?? null;
@@ -343,7 +351,7 @@ export function GameScene({
     const won = (epilogueReport.winning_team ?? '').toUpperCase() === 'HUMAN';
     return won
       ? `Итог: победа людей. В Конвой проникло ${x} ${synthWord}.`
-      : `Итог: проигрыш. В Конвой проникло ${x} ${synthWord}.`;
+      : `Итог: проигрыш — хотя бы 1 Синтетик на борту (${x} ${synthWord}).`;
   })();
 
   return (
@@ -352,6 +360,7 @@ export function GameScene({
         onOpenPrivateChat={handleOpenPrivateChat}
         onOpenGeneralChat={openGeneralChat}
       />
+      <StationMissionHost />
 
       <SceneCoverFrame>
         <RoundTable
@@ -416,7 +425,9 @@ export function GameScene({
           connected={connected}
           mockMode={mockMode}
           roomId={roomId}
-          onLeave={onLeave}
+          onLeave={
+            gameState === 'RESOLVE' && !matchEnded ? undefined : onLeave
+          }
         />
         {gatheredAtTable && gameState === 'RECESS' && !privateChatPlayerId && (
           <span className="rounded-full border border-bunker-border/70 bg-black/45 px-3 py-1 font-mono text-[10px] text-bunker-muted backdrop-blur-md">
@@ -444,7 +455,10 @@ export function GameScene({
       )}
 
       <GameHud
-        visible={gatheredAtTable && gameState !== 'RECESS'}
+        visible={
+          (gatheredAtTable && gameState !== 'RECESS') ||
+          (gameState === 'RESOLVE' && !matchEnded && !selfInBrig)
+        }
         chat={chat}
         players={players}
         myProfile={myProfile}
@@ -474,17 +488,18 @@ export function GameScene({
           waitingForConvoy={!matchEnded}
           phaseDeadlineTs={epiloguePhase ? phaseDeadlineTs : null}
           outcomeLine={brigOutcomeLine}
-          onLeave={onLeave}
+          onLeave={matchEnded ? onLeave : undefined}
         />
       )}
 
-      {/* Конвой: только живые не из карцера (leave → не «на борту») */}
+      {/* Конвой: живые не из карцера; посадка = баннер, аудит = фуллскрин */}
       {onConvoy && (
         <EpilogueOverlay
           boarding={!matchEnded}
           phaseDeadlineTs={phaseDeadlineTs}
+          brigFilled={brigCharacterIds.length}
           report={epilogueReport}
-          onLeave={onLeave}
+          onLeave={matchEnded ? onLeave : undefined}
         />
       )}
     </div>

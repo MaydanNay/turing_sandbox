@@ -30,7 +30,9 @@ async def _acquire_room_leadership(room_id: str) -> bool:
     """Ensure only one worker manages bots for a room."""
     key = f"bot_leader:{room_id}"
     current = await redis_store.redis.get(key)
-    if current is None or current.decode() == WORKER_ID:
+    if current is not None and not isinstance(current, str):
+        current = current.decode()
+    if current is None or current == WORKER_ID:
         await redis_store.redis.set(key, WORKER_ID, ex=15)
         return True
     return False
@@ -264,19 +266,24 @@ async def _bot_speak(room_id: str, bot_id: str, text: str) -> None:
 
 
 async def _run_ai_movement(room_id: str) -> None:
+    """Ambient outpost wander for seat bots (client applies only while standing)."""
     try:
-        # Define corners for pacing
-        CORNERS = [
-            (10.0, 30.0),  # Top Left
-            (85.0, 30.0),  # Top Right
-            (10.0, 100.0), # Bottom Left
-            (85.0, 100.0), # Bottom Right
+        # Prefer walkable-ish pads (%, scene coords used by the frontend pathfinder)
+        PADS = [
+            (18.0, 55.0),
+            (35.0, 70.0),
+            (55.0, 65.0),
+            (72.0, 55.0),
+            (25.0, 85.0),
+            (50.0, 90.0),
+            (70.0, 82.0),
+            (42.0, 48.0),
         ]
-        
+
         while True:
-            delay_s = random.uniform(5.0, 15.0)
+            delay_s = random.uniform(3.5, 9.0)
             await asyncio.sleep(delay_s)
-            
+
             is_leader = await _acquire_room_leadership(room_id)
             if not is_leader:
                 continue
@@ -284,57 +291,41 @@ async def _run_ai_movement(room_id: str) -> None:
             state = await redis_store.get_room(room_id)
             if state is None or state.phase == Phase.finished:
                 break
-                
-            if state.phase not in (Phase.init, Phase.recess):
+
+            # Skip only epilogue/boarding — table phases still wander if humans stand up
+            if state.phase in (Phase.resolve, Phase.finished):
                 continue
-                
-            bots = [p for p in state.players.values() if p.is_ai and p.connected]
+
+            bots = [
+                p
+                for p in state.players.values()
+                if p.is_ai and p.connected and p.is_alive
+            ]
             if not bots:
                 continue
-                
-            bot = random.choice(bots)
-            
-            # Calculate suspicion from recent events
-            events = await redis_store.list_events(room_id, limit=200)
-            suspicion = 0
-            for ev in events:
-                if ev.get("action_type") == "vote":
-                    payload = ev.get("raw_payload", {}).get("payload", {})
-                    if payload and payload.get("target") == bot.id:
-                        suspicion += 15
-                elif ev.get("action_type") == "suspicion_up":
-                    payload = ev.get("raw_payload", {})
-                    if payload.get("target") == bot.id:
-                        suspicion += 20
-            
-            if suspicion >= 30:
-                # Highly suspicious: Pace in a random corner
-                base_x, base_y = random.choice(CORNERS)
-                target_x = base_x + random.uniform(-10.0, 10.0)
-                target_y = base_y + random.uniform(-10.0, 10.0)
-            else:
-                # Calm: Cluster in the center (40%) or wander randomly (60%)
-                if random.random() < 0.40:
-                    # Central gathering area
-                    target_x = random.uniform(30.0, 70.0)
-                    target_y = random.uniform(40.0, 80.0)
-                else:
-                    # Random exploration
-                    target_x = random.uniform(5.0, 90.0)
-                    target_y = random.uniform(25.0, 105.0)
-            
-            event = {
-                "type": "message",
-                "room_id": room_id,
-                "client_id": bot.id,
-                "action": "move_to",
-                "is_ai": True,
-                "payload": {"x": target_x, "y": target_y},
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
-            await manager.broadcast(room_id, event)
+
+            # Move 1–3 bots each tick so the floor feels alive
+            movers = random.sample(bots, k=min(len(bots), random.randint(1, 3)))
+            for bot in movers:
+                base_x, base_y = random.choice(PADS)
+                target_x = max(8.0, min(92.0, base_x + random.uniform(-8.0, 8.0)))
+                target_y = max(35.0, min(98.0, base_y + random.uniform(-8.0, 8.0)))
+
+                event = {
+                    "type": "message",
+                    "room_id": room_id,
+                    "client_id": bot.client_id,
+                    "action": "move_to",
+                    "is_ai": True,
+                    "payload": {"x": target_x, "y": target_y},
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+                await manager.broadcast(room_id, event)
+                await asyncio.sleep(random.uniform(0.15, 0.45))
     except asyncio.CancelledError:
         pass
+    except Exception:
+        logger.exception("AI movement loop crashed room=%s", room_id)
     logger.info("AI movement loop stopped room=%s", room_id)
 
 

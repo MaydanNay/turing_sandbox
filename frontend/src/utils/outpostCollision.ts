@@ -6,6 +6,7 @@ import {
   getSceneLayout,
   seatLayoutToScenePos,
 } from '@/utils/seatPositions';
+import { getSceneObjects } from '@/utils/sceneObjectsRuntime';
 import {
   getActiveBlockPolygons,
   getActiveWalkPolygons,
@@ -23,12 +24,22 @@ export interface CircleObstacle {
   r: number;
 }
 
+export interface RectObstacle {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 const TABLE_RADIUS_PAD = 1.55;
 const SEAT_RADIUS_SCENE = 5.5;
 /** Extra clearance so chibis never spawn visually “in” the table ring */
 const FURNITURE_SPAWN_PAD = 5.5;
 const RING_SAMPLES = 16;
 const PATH_MARGIN = 0.85;
+/** Expand placed prop footprints slightly so feet don’t clip sprites */
+const SCENE_OBJECT_BLOCK_PAD = 0.75;
 
 function tableCenterScene(): Point {
   const { table } = getSceneLayout();
@@ -76,7 +87,37 @@ export function getBlockPolygons(): WalkPoint[][] {
   return getActiveBlockPolygons();
 }
 
+/** Axis-aligned footprints for every placed scene prop (brig, terminal, …). */
+export function getSceneObjectBlockRects(): RectObstacle[] {
+  return getSceneObjects().map((o) => ({
+    id: `obj-${o.id}`,
+    x: o.x - SCENE_OBJECT_BLOCK_PAD,
+    y: o.y - SCENE_OBJECT_BLOCK_PAD,
+    w: o.w + SCENE_OBJECT_BLOCK_PAD * 2,
+    h: o.h + SCENE_OBJECT_BLOCK_PAD * 2,
+  }));
+}
+
+export function pointInRectObstacle(p: Point, r: RectObstacle): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
+export function pointInSceneObjectBlock(p: Point): boolean {
+  return getSceneObjectBlockRects().some((r) => pointInRectObstacle(p, r));
+}
+
+/** Covering circle for push-out / dynamic avoidance around a prop AABB. */
+function rectToCoveringCircle(r: RectObstacle): CircleObstacle {
+  return {
+    id: r.id,
+    cx: r.x + r.w / 2,
+    cy: r.y + r.h / 2,
+    r: Math.hypot(r.w / 2, r.h / 2),
+  };
+}
+
 export function pointInWalkable(p: Point): boolean {
+  if (pointInSceneObjectBlock(p)) return false;
   const walks = getWalkPolygons();
   const blocks = getBlockPolygons();
   if (blocks.some((poly) => pointInPolygon(p, poly))) return false;
@@ -281,9 +322,8 @@ export function standUpSpawnForSeat(seatNumber: number): Point {
 }
 
 /**
- * Circle blockers for pathfinding.
- * Empty on purpose — walkability is owned by OUTPOST_WALK_POLYGONS only
- * (edit via /scene-editor). Table/chairs are not circle-blocked.
+ * Circle blockers for pathfinding: chairs + placed scene props.
+ * Prop AABBs are also rejected in pointInWalkable (accurate footprint).
  */
 export function getOutpostObstacles(opts?: {
   /** kept for call-site compat (sit path) */
@@ -306,6 +346,10 @@ export function getOutpostObstacles(opts?: {
       r: SEAT_RADIUS_SCENE * seatLayout.scale,
     });
   });
+
+  for (const rect of getSceneObjectBlockRects()) {
+    obstacles.push(rectToCoveringCircle(rect));
+  }
 
   return obstacles;
 }
@@ -345,6 +389,64 @@ function segmentStaysWalkable(a: Point, b: Point): boolean {
 function lineOfSight(a: Point, b: Point, obstacles: CircleObstacle[]): boolean {
   if (!segmentStaysWalkable(a, b)) return false;
   return !obstacles.some((o) => segmentHitsObstacle(a, b, o));
+}
+
+function pointClearAndWalkable(p: Point, obstacles: CircleObstacle[]): boolean {
+  return pointInWalkable(p) && clearOfObstacles(p, obstacles);
+}
+
+/**
+ * Last walkable (and obstacle-clear) point on the segment from→to.
+ * Used for WASD so walls stop movement instead of snapping/detouring sideways.
+ */
+export function lastWalkableAlongRay(
+  from: Point,
+  to: Point,
+  obstacles: CircleObstacle[] = [],
+): Point {
+  let start = from;
+  if (!pointClearAndWalkable(start, obstacles)) {
+    start = clampToWanderBounds(pushOutOfObstaclesRaw(start, obstacles));
+  }
+  if (!pointClearAndWalkable(start, obstacles)) return start;
+
+  const segmentOk = (p: Point): boolean => {
+    if (!pointClearAndWalkable(p, obstacles)) return false;
+    if (!segmentStaysWalkable(start, p)) return false;
+    return !obstacles.some((o) => segmentHitsObstacle(start, p, o));
+  };
+
+  if (segmentOk(to)) return to;
+
+  let lo = 0;
+  let hi = 1;
+  let best = start;
+  for (let i = 0; i < 16; i++) {
+    const mid = (lo + hi) / 2;
+    const p = {
+      x: start.x + (to.x - start.x) * mid,
+      y: start.y + (to.y - start.y) * mid,
+    };
+    if (segmentOk(p)) {
+      best = p;
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  // Pull slightly toward start so edge samples stay inside the walk mask
+  if (dist(start, best) > 0.05) {
+    const dx = start.x - best.x;
+    const dy = start.y - best.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const pulled = {
+      x: best.x + (dx / len) * 0.12,
+      y: best.y + (dy / len) * 0.12,
+    };
+    if (segmentOk(pulled)) return pulled;
+  }
+  return best;
 }
 
 function pushOutOfObstaclesRaw(p: Point, obstacles: CircleObstacle[]): Point {

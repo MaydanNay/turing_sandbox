@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, ArrowRight } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Pencil } from 'lucide-react';
 
 import { CharacterAssetEditor } from '@/components/sceneEditor/CharacterAssetEditor';
 import { CharacterInfoModal } from '@/components/sceneEditor/CharacterInfoModal';
@@ -22,6 +22,9 @@ import {
 import {
   OUTPOST_SCENE_OBJECTS,
   SCENE_OBJECT_DEFS,
+  sceneObjectCategory,
+  sceneObjectDefsByCategory,
+  type SceneObjectCategory,
   type SceneObjectPlacement,
   type SceneObjectType,
 } from '@/data/outpostSceneObjects';
@@ -29,6 +32,12 @@ import {
   cloneFurnitureLayout,
   type FurnitureLayout,
 } from '@/data/outpostFurniture';
+import {
+  clampStandingScale,
+  cloneStandingSpots,
+  OUTPOST_STANDING_SPOTS,
+  type StandingSpot,
+} from '@/data/outpostStandingSpots';
 import {
   applyFurnitureDrag,
   applyFurnitureResize,
@@ -42,10 +51,16 @@ import {
   setLiveFurniture,
 } from '@/utils/furnitureRuntime';
 import {
+  clearLiveStandingSpots,
+  setLiveStandingSpots,
+} from '@/utils/standingSpotsRuntime';
+import {
   cloneEditorSnapshot,
   createEditorHistory,
   type EditorHistorySnapshot,
 } from '@/utils/editorHistory';
+import { OUTPOST_BASE_WIDTH } from '@/utils/seatPositions';
+import { OUTPOST_SCENE_ASPECT } from '@/utils/sceneCover';
 import {
   clearLiveSceneObjects,
   setLiveSceneObjects,
@@ -54,6 +69,7 @@ import {
   getEditorShowPlayers,
   getEditorUiVersion,
   resetEditorUiFlags,
+  setEditorMode,
   setEditorShowPlayers,
   subscribeEditorUi,
 } from '@/utils/sceneEditorRuntime';
@@ -64,19 +80,98 @@ import {
 import {
   serializeFurniture,
   serializeSceneObjects,
+  serializeStandingSpots,
   serializeWalkMask,
   toPrettyJson,
 } from '@/utils/sceneEditorSerialize';
 
 const AUTH_KEY = 'turing_scene_editor_auth';
+const MODE_KEY = 'turing_scene_editor_mode';
 const VERTEX_HIT_PCT = 2.2;
 const HANDLE_HIT_PCT = 2.8;
+/** Typical pose PNG height/width (~1153×912). */
+const STANDING_SPRITE_HW = 1153 / 912;
+const STANDING_FOOT_ANCHOR = 0.92;
+/** width%→height%: height% = width% × (h/w) × sceneAspect */
+const STANDING_BOX_HW = STANDING_SPRITE_HW * OUTPOST_SCENE_ASPECT;
 
 type EditMode = 'props' | 'polygons' | 'characters';
-type PropsPaint = 'objects' | 'furniture';
+/** Основные = мебель · Дополнительные / Игровые = scene props */
+type PropsPaint = 'core' | 'extra' | 'game';
 type PolyPaint = 'walk' | 'block';
 type CharacterPanel = 'info' | 'assets' | null;
 type ResizeHandle = 'nw' | 'ne' | 'sw' | 'se';
+
+function readStoredEditMode(): EditMode {
+  try {
+    const raw = localStorage.getItem(MODE_KEY);
+    if (raw === 'props' || raw === 'polygons' || raw === 'characters') return raw;
+  } catch {
+    /* ignore */
+  }
+  return 'props';
+}
+
+function writeStoredEditMode(mode: EditMode) {
+  try {
+    localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
+
+function initialStatusForMode(mode: EditMode): string {
+  if (mode === 'characters') {
+    return 'Персонажи: тянуть · угол = размер · список → инфо';
+  }
+  if (mode === 'polygons') {
+    return 'Просмотр зон · Редактировать — точки и рисование';
+  }
+  return 'Объекты: добавить → тянуть → углы для размера';
+}
+
+function standingSceneBox(spot: StandingSpot): {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+} {
+  const w = OUTPOST_BASE_WIDTH * spot.scale;
+  const h = w * STANDING_BOX_HW;
+  return {
+    x: spot.x - w / 2,
+    y: spot.y - h * STANDING_FOOT_ANCHOR,
+    w,
+    h,
+  };
+}
+
+function SidePanelToggle({
+  open,
+  onToggle,
+  label,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-white/20 text-neutral-300 hover:bg-white/10 hover:text-white"
+      onClick={onToggle}
+      aria-expanded={open}
+      title={open ? 'Свернуть' : 'Развернуть'}
+      aria-label={open ? `Свернуть: ${label}` : `Развернуть: ${label}`}
+    >
+      {open ? (
+        <ChevronLeft className="size-3.5" strokeWidth={2.25} />
+      ) : (
+        <ChevronRight className="size-3.5" strokeWidth={2.25} />
+      )}
+    </button>
+  );
+}
 
 type DragTarget =
   | { kind: 'draft'; index: number }
@@ -111,6 +206,22 @@ type DragTarget =
       startX: number;
       startY: number;
       orig: FurnitureLayout;
+    }
+  | {
+      kind: 'standing-scale';
+      seatIndex: number;
+      origBoxX: number;
+      origBoxY: number;
+      orig: StandingSpot[];
+    }
+  | {
+      kind: 'standing-move';
+      seatIndex: number;
+      startX: number;
+      startY: number;
+      origX: number;
+      origY: number;
+      orig: StandingSpot[];
     };
 
 function sameFurnitureSel(
@@ -289,13 +400,14 @@ function EditorAuthGate({ onUnlock }: { onUnlock: () => void }) {
 export function WalkEditorOverlay() {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [authed, setAuthed] = useState(() => isEditorAuthed());
-  const [mode, setMode] = useState<EditMode>('props');
-  const [propsPaint, setPropsPaint] = useState<PropsPaint>('objects');
+  const [mode, setMode] = useState<EditMode>(() => readStoredEditMode());
+  const [propsPaint, setPropsPaint] = useState<PropsPaint>('core');
   const [polyPaint, setPolyPaint] = useState<PolyPaint>('walk');
   const [characterFocus, setCharacterFocus] = useState<CharacterDefinition | null>(
     null,
   );
   const [characterPanel, setCharacterPanel] = useState<CharacterPanel>(null);
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [draft, setDraft] = useState<WalkPoint[]>([]);
   const [walkClosed, setWalkClosed] = useState<WalkPoint[][]>(() =>
     OUTPOST_WALK_POLYGONS.map((p) => p.map((pt) => ({ ...pt }))),
@@ -309,17 +421,22 @@ export function WalkEditorOverlay() {
   const [furniture, setFurniture] = useState<FurnitureLayout>(() =>
     cloneFurnitureLayout(),
   );
+  const [standingSpots, setStandingSpots] = useState<StandingSpot[]>(() =>
+    cloneStandingSpots(),
+  );
   const [furnitureSel, setFurnitureSel] = useState<FurnitureSelection | null>(
     null,
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [status, setStatus] = useState(
-    'Объекты: добавить → тянуть → углы для размера',
+  const [status, setStatus] = useState(() =>
+    initialStatusForMode(readStoredEditMode()),
   );
   const [drag, setDrag] = useState<DragTarget | null>(null);
   const [saving, setSaving] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
+  /** false = preview filled zones only; true = vertices + paint + hide bottom bar */
+  const [polygonEditing, setPolygonEditing] = useState(false);
   const [histRev, setHistRev] = useState(0);
   const historyRef = useRef(createEditorHistory());
   const gestureHistoryPushed = useRef(false);
@@ -331,6 +448,7 @@ export function WalkEditorOverlay() {
     draft,
     objects,
     furniture,
+    standingSpots,
   });
   stateRef.current = {
     walkClosed,
@@ -338,6 +456,7 @@ export function WalkEditorOverlay() {
     draft,
     objects,
     furniture,
+    standingSpots,
   };
 
   const captureSnapshot = useCallback((): EditorHistorySnapshot => {
@@ -350,6 +469,7 @@ export function WalkEditorOverlay() {
     setDraft(snap.draft);
     setObjects(snap.objects);
     setFurniture(snap.furniture);
+    setStandingSpots(snap.standingSpots);
     setDrag(null);
     setSelectedId(null);
     setFurnitureSel(null);
@@ -401,10 +521,19 @@ export function WalkEditorOverlay() {
   }, [furniture]);
 
   useEffect(() => {
+    setLiveStandingSpots(standingSpots);
+  }, [standingSpots]);
+
+  useEffect(() => {
+    setEditorMode(mode);
+  }, [mode]);
+
+  useEffect(() => {
     return () => {
       clearLiveWalkMask();
       clearLiveSceneObjects();
       clearLiveFurniture();
+      clearLiveStandingSpots();
       resetEditorUiFlags();
     };
   }, []);
@@ -423,31 +552,59 @@ export function WalkEditorOverlay() {
     setEditorShowPlayers(!showPlayers);
   };
 
-  const editingObjects = mode === 'props' && propsPaint === 'objects';
-  const editingFurniture = mode === 'props' && propsPaint === 'furniture';
+  const enterPolygonEdit = () => {
+    setPolygonEditing(true);
+    setActionsOpen(false);
+    setModeOpen(false);
+    setStatus(
+      polyPaint === 'block'
+        ? 'Красный = нельзя · Закрыть полигон = готово'
+        : 'Жёлтый = можно · Закрыть полигон = готово',
+    );
+  };
+
+  const exitPolygonEdit = () => {
+    setPolygonEditing(false);
+    setDraft([]);
+    setDrag(null);
+    setActionsOpen(false);
+    setModeOpen(false);
+    setStatus('Просмотр зон · Редактировать — точки и рисование');
+  };
+
+  const editingCore = mode === 'props' && propsPaint === 'core';
+  const editingExtra = mode === 'props' && propsPaint === 'extra';
+  const editingGame = mode === 'props' && propsPaint === 'game';
+  const editingPlacedProps = editingExtra || editingGame;
+
+  const propsStatusHint = (paint: PropsPaint) => {
+    if (paint === 'core') {
+      return 'Основные: группа / стол / стулья · угол = размер';
+    }
+    if (paint === 'extra') {
+      return 'Дополнительные: красная зона = нельзя ходить · тянуть / углы';
+    }
+    return 'Игровые: красная зона = нельзя ходить · тянуть / углы';
+  };
 
   const switchMode = (next: EditMode) => {
     setMode(next);
+    writeStoredEditMode(next);
     setDraft([]);
     setDrag(null);
     setSelectedId(null);
     setFurnitureSel(null);
     setCharacterFocus(null);
     setCharacterPanel(null);
+    setPolygonEditing(false);
+    setActionsOpen(false);
+    setModeOpen(false);
     if (next === 'props') {
-      setStatus(
-        propsPaint === 'furniture'
-          ? 'Основа: группа / стол / стулья · угол = размер'
-          : 'Карцер: добавить → тянуть → углы для размера',
-      );
+      setStatus(propsStatusHint(propsPaint));
     } else if (next === 'characters') {
-      setStatus('Персонажи: клик по имени → инфо → карандаш для ассетов');
+      setStatus('Персонажи: тянуть · угол = размер · список → инфо');
     } else {
-      setStatus(
-        polyPaint === 'block'
-          ? 'Красный = нельзя · Закрыть полигон = готово'
-          : 'Жёлтый = можно · Закрыть полигон = готово',
-      );
+      setStatus('Просмотр зон · Редактировать — точки и рисование');
     }
   };
 
@@ -457,11 +614,7 @@ export function WalkEditorOverlay() {
     setDrag(null);
     setSelectedId(null);
     setFurnitureSel(null);
-    setStatus(
-      next === 'furniture'
-        ? 'Основа: группа / стол / стулья · угол = размер'
-        : 'Карцер: добавить → тянуть → углы для размера',
-    );
+    setStatus(propsStatusHint(next));
   };
 
   const switchPolyPaint = (next: PolyPaint) => {
@@ -509,11 +662,62 @@ export function WalkEditorOverlay() {
 
   const onPointerDown = (e: ReactPointerEvent) => {
     if (!surfaceRef.current || !authed) return;
-    if (mode === 'characters') return;
     const p = clientToPct(e.clientX, e.clientY, surfaceRef.current);
     gestureHistoryPushed.current = false;
 
-    if (editingFurniture) {
+    if (mode === 'characters') {
+      if (characterFocus) {
+        const seatIndex = characterFocus.seat - 1;
+        const spot = standingSpots[seatIndex];
+        if (spot) {
+          const box = standingSceneBox(spot);
+          const hx = box.x + box.w;
+          const hy = box.y + box.h;
+          if (Math.hypot(hx - p.x, hy - p.y) <= HANDLE_HIT_PCT) {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setDrag({
+              kind: 'standing-scale',
+              seatIndex,
+              origBoxX: box.x,
+              origBoxY: box.y,
+              orig: cloneStandingSpots(standingSpots),
+            });
+            return;
+          }
+        }
+      }
+      for (let i = CHARACTERS.length - 1; i >= 0; i--) {
+        const character = CHARACTERS[i]!;
+        const spot = standingSpots[character.seat - 1];
+        if (!spot) continue;
+        const box = standingSceneBox(spot);
+        if (
+          p.x >= box.x &&
+          p.x <= box.x + box.w &&
+          p.y >= box.y &&
+          p.y <= box.y + box.h
+        ) {
+          setCharacterFocus(character);
+          setCharacterPanel(null);
+          e.currentTarget.setPointerCapture(e.pointerId);
+          setDrag({
+            kind: 'standing-move',
+            seatIndex: character.seat - 1,
+            startX: p.x,
+            startY: p.y,
+            origX: spot.x,
+            origY: spot.y,
+            orig: cloneStandingSpots(standingSpots),
+          });
+          return;
+        }
+      }
+      setCharacterFocus(null);
+      setCharacterPanel(null);
+      return;
+    }
+
+    if (editingCore) {
       if (furnitureSel && furnitureBox) {
         const hx = furnitureBox.x + furnitureBox.w;
         const hy = furnitureBox.y + furnitureBox.h;
@@ -546,9 +750,11 @@ export function WalkEditorOverlay() {
       return;
     }
 
-    if (editingObjects) {
-      for (let i = objects.length - 1; i >= 0; i--) {
-        const o = objects[i]!;
+    if (editingPlacedProps) {
+      const cat: SceneObjectCategory = editingGame ? 'game' : 'extra';
+      const layer = objects.filter((o) => sceneObjectCategory(o.type) === cat);
+      for (let i = layer.length - 1; i >= 0; i--) {
+        const o = layer[i]!;
         const handle = hitResizeHandle(p, o);
         if (handle) {
           setSelectedId(o.id);
@@ -564,7 +770,7 @@ export function WalkEditorOverlay() {
           return;
         }
       }
-      const hit = hitObject(p, objects);
+      const hit = hitObject(p, layer);
       if (hit) {
         setSelectedId(hit.id);
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -581,6 +787,8 @@ export function WalkEditorOverlay() {
       setSelectedId(null);
       return;
     }
+
+    if (mode !== 'polygons' || !polygonEditing) return;
 
     const vertex = findVertexAt(p);
     if (vertex) {
@@ -608,6 +816,36 @@ export function WalkEditorOverlay() {
     }
     if (drag.kind === 'furniture-resize') {
       setFurniture(applyFurnitureResize(furniture, drag.sel, p, drag.orig));
+      return;
+    }
+
+    if (drag.kind === 'standing-scale') {
+      const dx = p.x - drag.origBoxX;
+      const dy = p.y - drag.origBoxY;
+      const newW = Math.max(dx, dy / STANDING_BOX_HW);
+      const scale = clampStandingScale(newW / OUTPOST_BASE_WIDTH);
+      setStandingSpots(
+        drag.orig.map((spot, i) =>
+          i === drag.seatIndex ? { ...spot, scale } : spot,
+        ),
+      );
+      return;
+    }
+
+    if (drag.kind === 'standing-move') {
+      const dx = p.x - drag.startX;
+      const dy = p.y - drag.startY;
+      setStandingSpots(
+        drag.orig.map((spot, i) =>
+          i === drag.seatIndex
+            ? {
+                ...spot,
+                x: clamp(drag.origX + dx, 2, 98),
+                y: clamp(drag.origY + dy, 8, 108),
+              }
+            : spot,
+        ),
+      );
       return;
     }
 
@@ -691,8 +929,9 @@ export function WalkEditorOverlay() {
     setObjects((list) => [...list, next]);
     setSelectedId(id);
     setMode('props');
-    setPropsPaint('objects');
-    setStatus(`Добавлен: ${def.label} ${count}`);
+    writeStoredEditMode('props');
+    setPropsPaint(def.category === 'game' ? 'game' : 'extra');
+    setStatus(`Добавлен: ${def.label} ${count} · красная блок-зона`);
   };
 
   const clearMode = () => {
@@ -703,16 +942,21 @@ export function WalkEditorOverlay() {
       return;
     }
     pushHistory();
-    if (editingObjects) {
-      setObjects([]);
+    if (editingExtra || editingGame) {
+      const cat: SceneObjectCategory = editingGame ? 'game' : 'extra';
+      setObjects((list) =>
+        list.filter((o) => sceneObjectCategory(o.type) !== cat),
+      );
       setSelectedId(null);
-      setStatus('Карцер очищен');
+      setStatus(
+        cat === 'game' ? 'Игровые очищены' : 'Дополнительные очищены',
+      );
       return;
     }
-    if (editingFurniture) {
+    if (editingCore) {
       setFurniture(cloneFurnitureLayout());
       setFurnitureSel(null);
-      setStatus('Основа сброшена к файлу');
+      setStatus('Основные сброшены к файлу');
       return;
     }
     setDraft([]);
@@ -729,6 +973,7 @@ export function WalkEditorOverlay() {
     );
     setObjects(OUTPOST_SCENE_OBJECTS.map((o) => ({ ...o })));
     setFurniture(cloneFurnitureLayout());
+    setStandingSpots(cloneStandingSpots(OUTPOST_STANDING_SPOTS));
     setFurnitureSel(null);
     setDraft([]);
     setSelectedId(null);
@@ -780,13 +1025,21 @@ export function WalkEditorOverlay() {
     setStatus('Скачан outpostFurniture.json (вся мебель)');
   };
 
+  const downloadStandingJson = () => {
+    downloadJsonFile(
+      'outpostStandingSpots.json',
+      toPrettyJson(serializeStandingSpots(standingSpots)),
+    );
+    setStatus('Скачан outpostStandingSpots.json (размеры персонажей)');
+  };
+
   const downloadCurrentMode = () => {
     if (mode === 'characters') {
-      setStatus('Скачивание персонажей — через редактор ассетов');
+      downloadStandingJson();
       return;
     }
-    if (editingObjects) downloadObjectsJson();
-    else if (editingFurniture) downloadFurnitureJson();
+    if (editingPlacedProps) downloadObjectsJson();
+    else if (editingCore) downloadFurnitureJson();
     else downloadWalkJson();
   };
 
@@ -819,17 +1072,23 @@ export function WalkEditorOverlay() {
   const modeButtonClass =
     mode === 'characters'
       ? 'border-violet-300/70 bg-violet-500/25 text-violet-100'
-      : mode === 'props' && propsPaint === 'furniture'
+      : mode === 'props' && propsPaint === 'core'
         ? 'border-sky-300/70 bg-sky-500/25 text-sky-100'
-        : mode === 'polygons' && polyPaint === 'block'
-          ? 'border-red-400/70 bg-red-500/25 text-red-100'
-          : 'border-amber-300/70 bg-amber-500/25 text-amber-100';
+        : mode === 'props' && propsPaint === 'game'
+          ? 'border-emerald-300/70 bg-emerald-500/25 text-emerald-100'
+          : mode === 'polygons' && polyPaint === 'block'
+            ? 'border-red-400/70 bg-red-500/25 text-red-100'
+            : 'border-amber-300/70 bg-amber-500/25 text-amber-100';
 
   const saveAllToDisk = useCallback(async () => {
     if (saving) return;
 
     if (furniture.seats.length !== 8) {
       setStatus('Мебель повреждена: нужно ровно 8 стульев');
+      return;
+    }
+    if (standingSpots.length !== 8) {
+      setStatus('Точки персонажей повреждены: нужно ровно 8');
       return;
     }
 
@@ -845,10 +1104,12 @@ export function WalkEditorOverlay() {
       walk?: ReturnType<typeof serializeWalkMask>;
       objects: ReturnType<typeof serializeSceneObjects>;
       furniture: ReturnType<typeof serializeFurniture>;
+      standing: ReturnType<typeof serializeStandingSpots>;
     } = {
       password: editorPassword(),
       objects: serializeSceneObjects(objects),
       furniture: serializeFurniture(furniture),
+      standing: serializeStandingSpots(standingSpots),
     };
 
     if (walk.length > 0) {
@@ -897,7 +1158,7 @@ export function WalkEditorOverlay() {
     } finally {
       setSaving(false);
     }
-  }, [saving, furniture, walkClosed, blockClosed, draft, mode, polyPaint, objects]);
+  }, [saving, furniture, standingSpots, walkClosed, blockClosed, draft, mode, polyPaint, objects]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -921,7 +1182,7 @@ export function WalkEditorOverlay() {
         return;
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (editingObjects && selectedId) {
+        if (editingPlacedProps && selectedId) {
           e.preventDefault();
           pushHistory();
           setObjects((list) => list.filter((o) => o.id !== selectedId));
@@ -959,15 +1220,24 @@ export function WalkEditorOverlay() {
   const draftDot = polyPaint === 'block' ? 'bg-red-400' : 'bg-[#39ff14]';
 
   const cursor =
-    drag?.kind === 'object-move' || drag?.kind === 'furniture-move'
+    drag?.kind === 'object-move' ||
+    drag?.kind === 'furniture-move' ||
+    drag?.kind === 'standing-move'
       ? 'grabbing'
-      : drag?.kind === 'object-resize' || drag?.kind === 'furniture-resize'
+      : drag?.kind === 'object-resize' ||
+          drag?.kind === 'furniture-resize' ||
+          drag?.kind === 'standing-scale'
         ? 'nwse-resize'
-        : editingObjects || editingFurniture || mode === 'characters'
+        : editingPlacedProps ||
+            editingCore ||
+            (mode === 'characters' && !characterFocus) ||
+            (mode === 'polygons' && !polygonEditing)
           ? 'default'
-          : drag
-            ? 'grabbing'
-            : 'crosshair';
+          : mode === 'characters'
+            ? 'default'
+            : drag
+              ? 'grabbing'
+              : 'crosshair';
 
   return (
     <>
@@ -1003,7 +1273,7 @@ export function WalkEditorOverlay() {
                 />
               );
             })}
-            {draft.length >= 2 && (
+            {polygonEditing && draft.length >= 2 && (
               <polygon
                 points={draft.map((pt) => `${pt.x},${pt.y}`).join(' ')}
                 fill={draftFill}
@@ -1014,7 +1284,30 @@ export function WalkEditorOverlay() {
           </svg>
         )}
 
-        {editingObjects && selected && (
+        {/* Any placed prop (extra/game) = red no-walk footprint */}
+        {(editingPlacedProps || mode === 'polygons' || mode === 'props') &&
+          objects.length > 0 && (
+            <div className="pointer-events-none absolute inset-0 z-[1]">
+              {objects.map((o) => (
+                <div
+                  key={`block-${o.id}`}
+                  className="absolute border border-red-400/80 bg-red-500/30 shadow-[inset_0_0_0_1px_rgba(127,29,29,0.35)]"
+                  title={`Блок: ${o.type}`}
+                  style={{
+                    left: `${o.x}%`,
+                    top: `${o.y}%`,
+                    width: `${o.w}%`,
+                    height: `${o.h}%`,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
+        {editingPlacedProps &&
+          selected &&
+          sceneObjectCategory(selected.type) ===
+            (editingGame ? 'game' : 'extra') && (
           <div className="pointer-events-none absolute inset-0 z-[1]">
             <div
               className="absolute border-2 border-amber-300/90 shadow-[0_0_0_1px_rgba(0,0,0,0.5)]"
@@ -1039,7 +1332,7 @@ export function WalkEditorOverlay() {
           </div>
         )}
 
-        {editingFurniture && furnitureBox && (
+        {editingCore && furnitureBox && (
           <div className="pointer-events-none absolute inset-0 z-[1]">
             <div
               className="absolute border-2 border-sky-300/90 shadow-[0_0_0_1px_rgba(0,0,0,0.5)]"
@@ -1058,6 +1351,34 @@ export function WalkEditorOverlay() {
           </div>
         )}
 
+        {mode === 'characters' &&
+          characterFocus &&
+          standingSpots[characterFocus.seat - 1] && (
+            <div className="pointer-events-none absolute inset-0 z-[1]">
+              {(() => {
+                const box = standingSceneBox(
+                  standingSpots[characterFocus.seat - 1]!,
+                );
+                return (
+                  <div
+                    className="absolute border-2 border-violet-300/90 shadow-[0_0_0_1px_rgba(0,0,0,0.5)]"
+                    style={{
+                      left: `${box.x}%`,
+                      top: `${box.y}%`,
+                      width: `${box.w}%`,
+                      height: `${box.h}%`,
+                    }}
+                  >
+                    <div
+                      className="absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-black bg-violet-300"
+                      style={{ left: '100%', top: '100%' }}
+                    />
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
         <div
           ref={surfaceRef}
           className="pointer-events-auto absolute inset-0 z-[2] touch-none"
@@ -1068,6 +1389,7 @@ export function WalkEditorOverlay() {
           onPointerCancel={onPointerUp}
         >
           {mode === 'polygons' &&
+            polygonEditing &&
             walkClosed.flatMap((poly, pi) =>
               poly.map((p, i) => (
                 <div
@@ -1078,6 +1400,7 @@ export function WalkEditorOverlay() {
               )),
             )}
           {mode === 'polygons' &&
+            polygonEditing &&
             blockClosed.flatMap((poly, pi) =>
               poly.map((p, i) => (
                 <div
@@ -1088,6 +1411,7 @@ export function WalkEditorOverlay() {
               )),
             )}
           {mode === 'polygons' &&
+            polygonEditing &&
             draft.map((p, i) => (
               <div
                 key={`d-${i}`}
@@ -1100,191 +1424,305 @@ export function WalkEditorOverlay() {
 
       {createPortal(
         <>
-          <button
-            type="button"
-            className={`pointer-events-auto fixed right-4 top-4 z-[100] rounded-lg border px-3 py-2 font-mono text-[11px] shadow-lg backdrop-blur-md ${
-              showPlayers
-                ? 'border-emerald-400/50 bg-black/90 text-emerald-100 hover:bg-emerald-500/15'
-                : 'border-amber-300/40 bg-black/90 text-amber-100 hover:bg-amber-500/15'
-            }`}
-            onClick={togglePlayers}
-          >
-            {showPlayers ? 'Скрыть игроков' : 'Показать игроков'}
-          </button>
+          <div className="pointer-events-auto fixed right-4 top-4 z-[100] flex flex-col items-end gap-2">
+            {mode === 'polygons' && (
+              <button
+                type="button"
+                className={`rounded-lg border px-3 py-2 font-mono text-[11px] shadow-lg backdrop-blur-md ${
+                  polygonEditing
+                    ? 'border-amber-300/50 bg-amber-500/20 text-amber-50 hover:bg-amber-500/30'
+                    : 'border-sky-400/45 bg-black/90 text-sky-100 hover:bg-sky-500/15'
+                }`}
+                onClick={() => {
+                  if (polygonEditing) exitPolygonEdit();
+                  else enterPolygonEdit();
+                }}
+              >
+                {polygonEditing ? 'Меню' : 'Редактировать'}
+              </button>
+            )}
+            {mode === 'characters' && (
+              <button
+                type="button"
+                className={`rounded-lg border px-3 py-2 font-mono text-[11px] shadow-lg backdrop-blur-md ${
+                  showPlayers
+                    ? 'border-emerald-400/50 bg-black/90 text-emerald-100 hover:bg-emerald-500/15'
+                    : 'border-amber-300/40 bg-black/90 text-amber-100 hover:bg-amber-500/15'
+                }`}
+                onClick={togglePlayers}
+              >
+                {showPlayers ? 'Скрыть игроков' : 'Показать игроков'}
+              </button>
+            )}
+          </div>
 
           {mode === 'characters' && (
-            <div className="pointer-events-auto fixed left-4 top-4 z-[100] flex w-60 flex-col gap-2 rounded-lg border border-violet-300/35 bg-black/90 p-2.5 font-mono text-[11px] text-amber-50 shadow-lg backdrop-blur-md">
-              <p className="px-1 uppercase tracking-wider text-violet-300/80">
-                Персонажи
-              </p>
-              <div className="max-h-[min(70vh,28rem)] space-y-1 overflow-y-auto">
-                {CHARACTERS.map((character) => (
+            <div
+              className={`pointer-events-auto fixed left-4 top-4 z-[100] flex flex-col gap-2 rounded-lg border border-violet-300/35 bg-black/90 p-2.5 font-mono text-[11px] text-amber-50 shadow-lg backdrop-blur-md ${
+                sidePanelOpen ? 'w-60' : 'w-auto'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 px-1">
+                <p className="uppercase tracking-wider text-violet-300/80">
+                  Персонажи
+                </p>
+                <SidePanelToggle
+                  open={sidePanelOpen}
+                  label="Персонажи"
+                  onToggle={() => setSidePanelOpen((v) => !v)}
+                />
+              </div>
+              {sidePanelOpen && (
+                <div className="max-h-[min(70vh,28rem)] space-y-1 overflow-y-auto">
+                  {CHARACTERS.map((character) => (
+                    <div
+                      key={character.id}
+                      className={`flex w-full items-center gap-1 rounded px-1 py-1 ${
+                        characterFocus?.id === character.id
+                          ? 'bg-violet-500/25 text-violet-100'
+                          : 'text-neutral-300 hover:bg-white/10'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 text-left"
+                        onClick={() => {
+                          setCharacterFocus(character);
+                          setCharacterPanel(null);
+                        }}
+                      >
+                        <img
+                          src={ASSETS.characters.chibi(character.id)}
+                          alt=""
+                          className="h-8 w-8 shrink-0 rounded border border-white/15 object-contain bg-black/30"
+                          onError={(e) => {
+                            e.currentTarget.src = ASSETS.characters.default;
+                          }}
+                        />
+                        <span className="min-w-0 flex-1 truncate">
+                          {character.displayName}
+                          <span className="mt-0.5 block truncate text-[10px] text-neutral-500">
+                            {character.role} · стул {character.seat}
+                          </span>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-white/15 text-neutral-300 hover:bg-violet-500/20 hover:text-violet-100"
+                        title="Инфо и ассеты"
+                        aria-label={`Инфо: ${character.displayName}`}
+                        onClick={() => {
+                          setCharacterFocus(character);
+                          setCharacterPanel('info');
+                        }}
+                      >
+                        <Pencil className="size-3.5" strokeWidth={2.25} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {(editingExtra || editingGame) && (
+            <div
+              className={`pointer-events-auto fixed left-4 top-4 z-[100] flex flex-col gap-2 rounded-lg border bg-black/90 p-2.5 font-mono text-[11px] text-amber-50 shadow-lg backdrop-blur-md ${
+                editingGame
+                  ? 'border-emerald-300/35'
+                  : 'border-amber-300/35'
+              } ${sidePanelOpen ? 'w-56' : 'w-auto'}`}
+            >
+              <div className="flex items-center justify-between gap-2 px-1">
+                <p
+                  className={`uppercase tracking-wider ${
+                    editingGame ? 'text-emerald-300/80' : 'text-amber-300/80'
+                  }`}
+                >
+                  {editingGame ? 'Игровые' : 'Дополнительные'}
+                </p>
+                <SidePanelToggle
+                  open={sidePanelOpen}
+                  label={editingGame ? 'Игровые' : 'Дополнительные'}
+                  onToggle={() => setSidePanelOpen((v) => !v)}
+                />
+              </div>
+              {sidePanelOpen && (
+                <>
+                  {sceneObjectDefsByCategory(
+                    editingGame ? 'game' : 'extra',
+                  ).map((def) => (
+                    <button
+                      key={def.type}
+                      type="button"
+                      className={`rounded border border-white/15 px-2 py-1.5 text-left ${
+                        editingGame
+                          ? 'hover:border-emerald-300/40 hover:bg-emerald-500/15'
+                          : 'hover:border-amber-300/40 hover:bg-amber-500/15'
+                      }`}
+                      onClick={() => addObject(def.type)}
+                    >
+                      + {def.label}
+                    </button>
+                  ))}
+                  {sceneObjectDefsByCategory(editingGame ? 'game' : 'extra')
+                    .length === 0 && (
+                    <p className="px-1 text-neutral-500">
+                      Каталог пуст — типы добавляются в коде
+                    </p>
+                  )}
+                  <div className="mt-1 max-h-40 space-y-1 overflow-y-auto border-t border-white/10 pt-2">
+                    {objects.filter(
+                      (o) =>
+                        sceneObjectCategory(o.type) ===
+                        (editingGame ? 'game' : 'extra'),
+                    ).length === 0 && (
+                      <p className="px-1 text-neutral-500">Пока пусто</p>
+                    )}
+                    {objects
+                      .filter(
+                        (o) =>
+                          sceneObjectCategory(o.type) ===
+                          (editingGame ? 'game' : 'extra'),
+                      )
+                      .map((o) => {
+                        const label =
+                          SCENE_OBJECT_DEFS.find((d) => d.type === o.type)
+                            ?.label ?? o.type;
+                        const peers = objects.filter((x) => x.type === o.type);
+                        const n = peers.indexOf(o) + 1;
+                        return (
+                          <button
+                            key={o.id}
+                            type="button"
+                            className={`w-full rounded px-2 py-1 text-left ${
+                              selectedId === o.id
+                                ? editingGame
+                                  ? 'bg-emerald-500/25 text-emerald-100'
+                                  : 'bg-amber-500/25 text-amber-100'
+                                : 'text-neutral-300 hover:bg-white/10'
+                            }`}
+                            onClick={() => setSelectedId(o.id)}
+                          >
+                            {label} {n}
+                          </button>
+                        );
+                      })}
+                  </div>
+                  {selected &&
+                    sceneObjectCategory(selected.type) ===
+                      (editingGame ? 'game' : 'extra') && (
+                      <button
+                        type="button"
+                        className="rounded border border-red-400/40 px-2 py-1 text-red-200 hover:bg-red-500/15"
+                        onClick={() => {
+                          pushHistory();
+                          setObjects((list) =>
+                            list.filter((o) => o.id !== selected.id),
+                          );
+                          setSelectedId(null);
+                        }}
+                      >
+                        Удалить выбранный
+                      </button>
+                    )}
+                </>
+              )}
+            </div>
+          )}
+
+          {editingCore && (
+            <div
+              className={`pointer-events-auto fixed left-4 top-4 z-[100] flex flex-col gap-2 rounded-lg border border-sky-300/35 bg-black/90 p-2.5 font-mono text-[11px] text-amber-50 shadow-lg backdrop-blur-md ${
+                sidePanelOpen ? 'w-56' : 'w-auto'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 px-1">
+                <p className="uppercase tracking-wider text-sky-300/80">
+                  Основные
+                </p>
+                <SidePanelToggle
+                  open={sidePanelOpen}
+                  label="Основные"
+                  onToggle={() => setSidePanelOpen((v) => !v)}
+                />
+              </div>
+              {sidePanelOpen && (
+                <>
                   <button
-                    key={character.id}
                     type="button"
-                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left ${
-                      characterFocus?.id === character.id
-                        ? 'bg-violet-500/25 text-violet-100'
+                    className={`w-full rounded px-2 py-1 text-left ${
+                      sameFurnitureSel(furnitureSel, { kind: 'group' })
+                        ? 'bg-sky-500/25 text-sky-100'
                         : 'text-neutral-300 hover:bg-white/10'
                     }`}
-                    onClick={() => {
-                      setCharacterFocus(character);
-                      setCharacterPanel('info');
-                    }}
+                    onClick={() => setFurnitureSel({ kind: 'group' })}
                   >
-                    <img
-                      src={ASSETS.characters.chibi(character.id)}
-                      alt=""
-                      className="h-8 w-8 shrink-0 rounded border border-white/15 object-contain bg-black/30"
-                      onError={(e) => {
-                        e.currentTarget.src = ASSETS.characters.default;
-                      }}
-                    />
-                    <span className="min-w-0 flex-1 truncate">
-                      {character.displayName}
-                      <span className="mt-0.5 block truncate text-[10px] text-neutral-500">
-                        {character.role} · стул {character.seat}
-                      </span>
-                    </span>
+                    Группа
                   </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {editingObjects && (
-            <div className="pointer-events-auto fixed left-4 top-4 z-[100] flex w-56 flex-col gap-2 rounded-lg border border-amber-300/35 bg-black/90 p-2.5 font-mono text-[11px] text-amber-50 shadow-lg backdrop-blur-md">
-              <p className="px-1 uppercase tracking-wider text-amber-300/80">
-                Карцер
-              </p>
-              {SCENE_OBJECT_DEFS.map((def) => (
-                <button
-                  key={def.type}
-                  type="button"
-                  className="rounded border border-white/15 px-2 py-1.5 text-left hover:border-amber-300/40 hover:bg-amber-500/15"
-                  onClick={() => addObject(def.type)}
-                >
-                  + {def.label}
-                </button>
-              ))}
-              <div className="mt-1 max-h-40 space-y-1 overflow-y-auto border-t border-white/10 pt-2">
-                {objects.length === 0 && (
-                  <p className="px-1 text-neutral-500">Пока пусто</p>
-                )}
-                {objects.map((o) => {
-                  const label =
-                    SCENE_OBJECT_DEFS.find((d) => d.type === o.type)?.label ??
-                    o.type;
-                  const n =
-                    objects.filter((x) => x.type === o.type).indexOf(o) + 1;
-                  return (
+                  <button
+                    type="button"
+                    className={`w-full rounded px-2 py-1 text-left ${
+                      sameFurnitureSel(furnitureSel, { kind: 'table' })
+                        ? 'bg-sky-500/25 text-sky-100'
+                        : 'text-neutral-300 hover:bg-white/10'
+                    }`}
+                    onClick={() => setFurnitureSel({ kind: 'table' })}
+                  >
+                    Стол
+                  </button>
+                  <div className="max-h-52 space-y-1 overflow-y-auto border-t border-white/10 pt-2">
+                    {furniture.seats.map((seat, index) => {
+                      const character = CHARACTERS.find(
+                        (c) => c.seat === index + 1,
+                      );
+                      const sel: FurnitureSelection = { kind: 'seat', index };
+                      return (
+                        <button
+                          key={index}
+                          type="button"
+                          className={`w-full rounded px-2 py-1 text-left ${
+                            sameFurnitureSel(furnitureSel, sel)
+                              ? 'bg-sky-500/25 text-sky-100'
+                              : 'text-neutral-300 hover:bg-white/10'
+                          }`}
+                          onClick={() => setFurnitureSel(sel)}
+                        >
+                          Стул {index + 1}
+                          {character ? ` · ${character.displayName}` : ''}
+                          {seat.behindTable ? ' · зад' : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {furnitureSel?.kind === 'seat' && (
                     <button
-                      key={o.id}
                       type="button"
-                      className={`w-full rounded px-2 py-1 text-left ${
-                        selectedId === o.id
-                          ? 'bg-amber-500/25 text-amber-100'
-                          : 'text-neutral-300 hover:bg-white/10'
-                      }`}
-                      onClick={() => setSelectedId(o.id)}
+                      className="rounded border border-white/20 px-2 py-1 hover:bg-white/10"
+                      onClick={() => {
+                        const i = furnitureSel.index;
+                        pushHistory();
+                        setFurniture((f) => ({
+                          ...f,
+                          seats: f.seats.map((s, idx) =>
+                            idx === i
+                              ? { ...s, behindTable: !s.behindTable }
+                              : s,
+                          ),
+                        }));
+                      }}
                     >
-                      {label} {n}
+                      {furniture.seats[furnitureSel.index]?.behindTable
+                        ? 'Убрать «за столом»'
+                        : 'Пометить «за столом»'}
                     </button>
-                  );
-                })}
-              </div>
-              {selected && (
-                <button
-                  type="button"
-                  className="rounded border border-red-400/40 px-2 py-1 text-red-200 hover:bg-red-500/15"
-                  onClick={() => {
-                    pushHistory();
-                    setObjects((list) =>
-                      list.filter((o) => o.id !== selected.id),
-                    );
-                    setSelectedId(null);
-                  }}
-                >
-                  Удалить выбранный
-                </button>
+                  )}
+                </>
               )}
             </div>
           )}
 
-          {editingFurniture && (
-            <div className="pointer-events-auto fixed left-4 top-4 z-[100] flex w-56 flex-col gap-2 rounded-lg border border-sky-300/35 bg-black/90 p-2.5 font-mono text-[11px] text-amber-50 shadow-lg backdrop-blur-md">
-              <p className="px-1 uppercase tracking-wider text-sky-300/80">
-                Основа
-              </p>
-              <button
-                type="button"
-                className={`w-full rounded px-2 py-1 text-left ${
-                  sameFurnitureSel(furnitureSel, { kind: 'group' })
-                    ? 'bg-sky-500/25 text-sky-100'
-                    : 'text-neutral-300 hover:bg-white/10'
-                }`}
-                onClick={() => setFurnitureSel({ kind: 'group' })}
-              >
-                Группа
-              </button>
-              <button
-                type="button"
-                className={`w-full rounded px-2 py-1 text-left ${
-                  sameFurnitureSel(furnitureSel, { kind: 'table' })
-                    ? 'bg-sky-500/25 text-sky-100'
-                    : 'text-neutral-300 hover:bg-white/10'
-                }`}
-                onClick={() => setFurnitureSel({ kind: 'table' })}
-              >
-                Стол
-              </button>
-              <div className="max-h-52 space-y-1 overflow-y-auto border-t border-white/10 pt-2">
-                {furniture.seats.map((seat, index) => {
-                  const character = CHARACTERS.find((c) => c.seat === index + 1);
-                  const sel: FurnitureSelection = { kind: 'seat', index };
-                  return (
-                    <button
-                      key={index}
-                      type="button"
-                      className={`w-full rounded px-2 py-1 text-left ${
-                        sameFurnitureSel(furnitureSel, sel)
-                          ? 'bg-sky-500/25 text-sky-100'
-                          : 'text-neutral-300 hover:bg-white/10'
-                      }`}
-                      onClick={() => setFurnitureSel(sel)}
-                    >
-                      Стул {index + 1}
-                      {character ? ` · ${character.displayName}` : ''}
-                      {seat.behindTable ? ' · зад' : ''}
-                    </button>
-                  );
-                })}
-              </div>
-              {furnitureSel?.kind === 'seat' && (
-                <button
-                  type="button"
-                  className="rounded border border-white/20 px-2 py-1 hover:bg-white/10"
-                  onClick={() => {
-                    const i = furnitureSel.index;
-                    pushHistory();
-                    setFurniture((f) => ({
-                      ...f,
-                      seats: f.seats.map((s, idx) =>
-                        idx === i
-                          ? { ...s, behindTable: !s.behindTable }
-                          : s,
-                      ),
-                    }));
-                  }}
-                >
-                  {furniture.seats[furnitureSel.index]?.behindTable
-                    ? 'Убрать «за столом»'
-                    : 'Пометить «за столом»'}
-                </button>
-              )}
-            </div>
-          )}
-
+          {(mode !== 'polygons' || !polygonEditing) && (
           <div className="pointer-events-none fixed bottom-4 left-1/2 z-[100] flex w-[min(98vw,1180px)] -translate-x-1/2 flex-col items-stretch gap-1.5">
             <p className="pointer-events-none truncate px-1 text-center font-mono text-[11px] text-amber-100/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
               {status}
@@ -1311,9 +1749,6 @@ export function WalkEditorOverlay() {
                 >
                   <ArrowRight className="size-3.5" strokeWidth={2.25} />
                 </button>
-              </div>
-
-              <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
                 <div className="relative" ref={modeMenuRef}>
                   <button
                     type="button"
@@ -1330,7 +1765,7 @@ export function WalkEditorOverlay() {
                   {modeOpen && (
                     <div
                       role="menu"
-                      className="absolute bottom-[calc(100%+6px)] left-1/2 z-[110] min-w-[12rem] -translate-x-1/2 overflow-hidden rounded-lg border border-amber-300/40 bg-black/95 py-1 shadow-xl backdrop-blur-md"
+                      className="absolute bottom-[calc(100%+6px)] left-0 z-[110] min-w-[12rem] overflow-hidden rounded-lg border border-amber-300/40 bg-black/95 py-1 shadow-xl backdrop-blur-md"
                     >
                       {(
                         [
@@ -1361,29 +1796,43 @@ export function WalkEditorOverlay() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
                 {mode === 'props' && (
                   <div className="flex overflow-hidden rounded border border-white/20">
                     <button
                       type="button"
                       className={`px-2.5 py-1 ${
-                        propsPaint === 'objects'
-                          ? 'bg-amber-500/30 text-amber-100'
+                        propsPaint === 'core'
+                          ? 'bg-sky-500/30 text-sky-100'
                           : 'text-amber-100/70 hover:bg-white/10'
                       }`}
-                      onClick={() => switchPropsPaint('objects')}
+                      onClick={() => switchPropsPaint('core')}
                     >
-                      Карцер
+                      Основные
                     </button>
                     <button
                       type="button"
                       className={`border-l border-white/20 px-2.5 py-1 ${
-                        propsPaint === 'furniture'
-                          ? 'bg-sky-500/30 text-sky-100'
+                        propsPaint === 'extra'
+                          ? 'bg-amber-500/30 text-amber-100'
                           : 'text-amber-100/70 hover:bg-white/10'
                       }`}
-                      onClick={() => switchPropsPaint('furniture')}
+                      onClick={() => switchPropsPaint('extra')}
                     >
-                      Основа
+                      Дополнительные
+                    </button>
+                    <button
+                      type="button"
+                      className={`border-l border-white/20 px-2.5 py-1 ${
+                        propsPaint === 'game'
+                          ? 'bg-emerald-500/30 text-emerald-100'
+                          : 'text-amber-100/70 hover:bg-white/10'
+                      }`}
+                      onClick={() => switchPropsPaint('game')}
+                    >
+                      Игровые
                     </button>
                   </div>
                 )}
@@ -1479,13 +1928,15 @@ export function WalkEditorOverlay() {
                     >
                       Скачать
                       <span className="mt-0.5 block text-[10px] text-amber-100/55">
-                        {editingObjects
-                          ? 'карцер'
-                          : editingFurniture
-                            ? 'основа'
-                            : mode === 'characters'
-                              ? 'персонажи'
-                              : 'проходка'}
+                        {editingExtra
+                          ? 'доп. объекты'
+                          : editingGame
+                            ? 'игровые'
+                            : editingCore
+                              ? 'основные'
+                              : mode === 'characters'
+                                ? 'размеры'
+                                : 'проходка'}
                       </span>
                     </button>
                     <div className="my-1 border-t border-white/10" />
@@ -1506,10 +1957,25 @@ export function WalkEditorOverlay() {
               </div>
             </div>
           </div>
+          )}
 
           {characterFocus && characterPanel === 'info' && (
             <CharacterInfoModal
               character={characterFocus}
+              scale={
+                standingSpots[characterFocus.seat - 1]?.scale ?? 0.9
+              }
+              onScaleGestureStart={() => pushHistory()}
+              onScaleChange={(scale) => {
+                const seatIndex = characterFocus.seat - 1;
+                setStandingSpots((spots) =>
+                  spots.map((spot, i) =>
+                    i === seatIndex
+                      ? { ...spot, scale: clampStandingScale(scale) }
+                      : spot,
+                  ),
+                );
+              }}
               onClose={() => {
                 setCharacterPanel(null);
                 setCharacterFocus(null);

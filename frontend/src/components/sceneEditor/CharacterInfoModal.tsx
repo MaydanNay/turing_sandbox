@@ -8,12 +8,18 @@ import {
 
 interface CharacterInfoModalProps {
   character: CharacterDefinition;
+  scale: number;
+  onScaleChange: (scale: number) => void;
+  onScaleGestureStart?: () => void;
   onClose: () => void;
   onEditAssets: () => void;
 }
 
 export function CharacterInfoModal({
   character,
+  scale,
+  onScaleChange,
+  onScaleGestureStart,
   onClose,
   onEditAssets,
 }: CharacterInfoModalProps) {
@@ -71,6 +77,24 @@ export function CharacterInfoModal({
           </dd>
           <dt className="text-neutral-500">Место</dt>
           <dd className="text-amber-100">Стул {character.seat}</dd>
+          <dt className="text-neutral-500 self-center">Размер</dt>
+          <dd className="text-amber-100">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-[11px] text-neutral-400">
+                {Math.round(scale * 100)}%
+              </span>
+              <input
+                type="range"
+                min={50}
+                max={140}
+                step={1}
+                value={Math.round(scale * 100)}
+                onPointerDown={() => onScaleGestureStart?.()}
+                onChange={(e) => onScaleChange(Number(e.target.value) / 100)}
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/15 accent-violet-300"
+              />
+            </label>
+          </dd>
         </dl>
 
         <div className="flex items-center justify-between gap-2 border-t border-white/10 px-4 py-3">

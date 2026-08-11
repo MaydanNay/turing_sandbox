@@ -146,6 +146,8 @@ export function facingFromDelta(
   fallback: CharacterStandFacing,
 ): CharacterStandFacing {
   if (Math.hypot(dx, dy) < 0.05) return fallback;
-  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'left' : 'right';
-  return dy < 0 ? 'back' : 'front';
+  // Most pose packs only ship left/right — vertical keep last facing
+  // (front/back would 404 and flash every steer tick).
+  if (Math.abs(dx) < Math.abs(dy) * 0.35) return fallback;
+  return dx < 0 ? 'left' : 'right';
 }

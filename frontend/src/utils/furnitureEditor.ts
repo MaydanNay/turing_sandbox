@@ -1,10 +1,19 @@
 import type { FurnitureLayout } from '@/data/outpostFurniture';
+import { OUTPOST_SCENE_ASPECT } from '@/utils/sceneCover';
 import { serializeFurniture, toPrettyJson } from '@/utils/sceneEditorSerialize';
-import { SEAT_BASE_WIDTH } from '@/utils/seatPositions';
 import {
+  SEAT_ANCHOR_Y,
+  SEAT_BASE_WIDTH,
+  SEAT_SPRITE_ASPECT,
+  TABLE_SPRITE_ASPECT,
   scenePosToSeatLocal,
   seatLayoutToScenePos,
 } from '@/utils/seatPositions';
+
+/** width% → height% on 16:9 scene cover */
+function spriteHeightScene(widthScene: number, pngHw: number): number {
+  return widthScene * pngHw * OUTPOST_SCENE_ASPECT;
+}
 
 export type FurnitureSelection =
   | { kind: 'group' }
@@ -15,51 +24,74 @@ export function formatFurnitureExport(layout: FurnitureLayout): string {
   return toPrettyJson(serializeFurniture(layout));
 }
 
+function seatSpriteSizeScene(
+  scale: number,
+  groupW: number,
+): { w: number; h: number } {
+  const w = (SEAT_BASE_WIDTH * scale * groupW) / 100;
+  return { w, h: spriteHeightScene(w, SEAT_SPRITE_ASPECT) };
+}
+
+function tableSpriteSizeScene(
+  widthPercent: number,
+  groupW: number,
+): { w: number; h: number } {
+  const w = (widthPercent / 100) * groupW;
+  return { w, h: spriteHeightScene(w, TABLE_SPRITE_ASPECT) };
+}
+
 export function seatHitRadiusScene(
   scale: number,
   groupW: number,
 ): number {
-  return Math.max(2.5, (SEAT_BASE_WIDTH * scale * groupW) / 200);
+  const { w, h } = seatSpriteSizeScene(scale, groupW);
+  return Math.max(2.5, Math.hypot(w / 2, h * SEAT_ANCHOR_Y) * 0.55);
 }
 
 export function tableHalfSizeScene(
   widthPercent: number,
   groupW: number,
 ): number {
-  return (widthPercent / 2 / 100) * groupW;
+  return tableSpriteSizeScene(widthPercent, groupW).w / 2;
+}
+
+function pointInBox(
+  p: { x: number; y: number },
+  box: { x: number; y: number; w: number; h: number },
+): boolean {
+  return (
+    p.x >= box.x &&
+    p.x <= box.x + box.w &&
+    p.y >= box.y &&
+    p.y <= box.y + box.h
+  );
 }
 
 export function hitFurniture(
   p: { x: number; y: number },
   layout: FurnitureLayout,
 ): FurnitureSelection | null {
-  const { group, seats, table } = layout;
+  const { group, seats } = layout;
 
   for (let i = seats.length - 1; i >= 0; i--) {
-    const seat = seats[i]!;
-    const c = seatLayoutToScenePos(seat, group);
-    const r = seatHitRadiusScene(seat.scale, group.widthPercent);
-    if (Math.hypot(p.x - c.x, p.y - c.y) <= r) {
+    const box = furnitureSelectionSceneBox({ kind: 'seat', index: i }, layout);
+    if (pointInBox(p, box)) {
       return { kind: 'seat', index: i };
     }
   }
 
-  const tLocal = {
-    x: table.x + (table.offsetX ?? 0),
-    y: table.y + (table.offsetY ?? 0),
-  };
-  const tc = seatLayoutToScenePos(tLocal, group);
-  const th = tableHalfSizeScene(table.widthPercent, group.widthPercent);
-  if (Math.hypot(p.x - tc.x, p.y - tc.y) <= th * 0.85) {
+  const tableBox = furnitureSelectionSceneBox({ kind: 'table' }, layout);
+  if (pointInBox(p, tableBox)) {
     return { kind: 'table' };
   }
 
   const half = group.widthPercent / 2;
+  const halfY = half * OUTPOST_SCENE_ASPECT;
   if (
     p.x >= group.x - half &&
     p.x <= group.x + half &&
-    p.y >= group.y - half &&
-    p.y <= group.y + half
+    p.y >= group.y - halfY &&
+    p.y <= group.y + halfY
   ) {
     return { kind: 'group' };
   }
@@ -67,6 +99,10 @@ export function hitFurniture(
   return null;
 }
 
+/**
+ * Scene-% AABB matching how table/chairs are actually drawn
+ * (width + sprite aspect + anchor).
+ */
 export function furnitureSelectionSceneBox(
   sel: FurnitureSelection,
   layout: FurnitureLayout,
@@ -74,11 +110,12 @@ export function furnitureSelectionSceneBox(
   const { group, seats, table } = layout;
   if (sel.kind === 'group') {
     const half = group.widthPercent / 2;
+    const halfY = half * OUTPOST_SCENE_ASPECT;
     return {
       x: group.x - half,
-      y: group.y - half,
+      y: group.y - halfY,
       w: group.widthPercent,
-      h: group.widthPercent,
+      h: group.widthPercent * OUTPOST_SCENE_ASPECT,
     };
   }
   if (sel.kind === 'table') {
@@ -87,13 +124,23 @@ export function furnitureSelectionSceneBox(
       y: table.y + (table.offsetY ?? 0),
     };
     const c = seatLayoutToScenePos(tLocal, group);
-    const half = tableHalfSizeScene(table.widthPercent, group.widthPercent);
-    return { x: c.x - half, y: c.y - half, w: half * 2, h: half * 2 };
+    const { w, h } = tableSpriteSizeScene(
+      table.widthPercent,
+      group.widthPercent,
+    );
+    // Table uses transform: translate(-50%, -50%)
+    return { x: c.x - w / 2, y: c.y - h / 2, w, h };
   }
   const seat = seats[sel.index]!;
   const c = seatLayoutToScenePos(seat, group);
-  const r = seatHitRadiusScene(seat.scale, group.widthPercent);
-  return { x: c.x - r, y: c.y - r, w: r * 2, h: r * 2 };
+  const { w, h } = seatSpriteSizeScene(seat.scale, group.widthPercent);
+  // Seat uses translateX(-50%) translateY(-88%)
+  return {
+    x: c.x - w / 2,
+    y: c.y - SEAT_ANCHOR_Y * h,
+    w,
+    h,
+  };
 }
 
 export function applyFurnitureDrag(
@@ -151,8 +198,11 @@ export function applyFurnitureResize(
 
   if (sel.kind === 'group') {
     const halfX = Math.abs(nowScene.x - orig.group.x);
-    const halfY = Math.abs(nowScene.y - orig.group.y);
-    next.group.widthPercent = Math.max(40, Math.min(120, Math.max(halfX, halfY) * 2));
+    const halfY = Math.abs(nowScene.y - orig.group.y) / OUTPOST_SCENE_ASPECT;
+    next.group.widthPercent = Math.max(
+      40,
+      Math.min(120, Math.max(halfX, halfY) * 2),
+    );
     return next;
   }
 
@@ -162,10 +212,14 @@ export function applyFurnitureResize(
       y: orig.table.y + (orig.table.offsetY ?? 0),
     };
     const c = seatLayoutToScenePos(tLocal, orig.group);
-    const dist = Math.hypot(nowScene.x - c.x, nowScene.y - c.y);
+    // SE handle → map to half-width (height% already includes scene aspect)
+    const dx = Math.abs(nowScene.x - c.x);
+    const dy = Math.abs(nowScene.y - c.y);
+    const hPerW = TABLE_SPRITE_ASPECT * OUTPOST_SCENE_ASPECT;
+    const halfW = Math.max(dx, dy / Math.max(0.05, hPerW));
     const widthPercent = Math.max(
       16,
-      Math.min(70, ((dist * 2) / orig.group.widthPercent) * 100),
+      Math.min(70, ((halfW * 2) / orig.group.widthPercent) * 100),
     );
     next.table.widthPercent = widthPercent;
     return next;
@@ -173,9 +227,14 @@ export function applyFurnitureResize(
 
   const seat = orig.seats[sel.index]!;
   const c = seatLayoutToScenePos(seat, orig.group);
-  const dist = Math.hypot(nowScene.x - c.x, nowScene.y - c.y);
-  const scale =
-    (dist * 200) / (SEAT_BASE_WIDTH * orig.group.widthPercent);
+  // Anchor at (50%, 88%): SE is (+w/2, +(1-0.88)h) from anchor
+  const dx = Math.max(0.01, nowScene.x - c.x);
+  const dy = Math.max(0.01, nowScene.y - c.y);
+  const hPerW = SEAT_SPRITE_ASPECT * OUTPOST_SCENE_ASPECT;
+  const wFromX = dx * 2;
+  const wFromY = dy / Math.max(0.05, (1 - SEAT_ANCHOR_Y) * hPerW);
+  const w = Math.max(wFromX, wFromY);
+  const scale = (w * 100) / (SEAT_BASE_WIDTH * orig.group.widthPercent);
   next.seats[sel.index] = {
     ...seat,
     scale: Math.max(0.5, Math.min(1.4, scale)),

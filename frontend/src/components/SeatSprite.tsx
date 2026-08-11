@@ -15,7 +15,11 @@ import { genderLabel } from '@/data/characters';
 import { useGameStore } from '@/store/gameStore';
 import { usePrivateChatStore } from '@/store/privateChatStore';
 import type { Player } from '@/types/game';
-import { SEAT_BASE_WIDTH, type SeatLayout } from '@/utils/seatPositions';
+import {
+  SEAT_ANCHOR_Y,
+  SEAT_BASE_WIDTH,
+  type SeatLayout,
+} from '@/utils/seatPositions';
 
 interface SeatSpriteProps {
   seatNumber: number;
@@ -36,7 +40,7 @@ const BASE_WIDTH_PERCENT = SEAT_BASE_WIDTH;
 
 /** Якорь: нижняя точка стула (основание) стоит в layout.x / layout.y */
 const SEAT_ANCHOR_STYLE = {
-  transform: 'translateX(-50%) translateY(-88%)',
+  transform: `translateX(-50%) translateY(-${SEAT_ANCHOR_Y * 100}%)`,
 } as const;
 
 export function SeatSprite({

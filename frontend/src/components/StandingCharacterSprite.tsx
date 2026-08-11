@@ -173,10 +173,17 @@ export function StandingCharacterSprite({
     const dx = layout.x - fromRef.current.x;
     const dy = layout.y - fromRef.current.y;
     if (Math.hypot(dx, dy) < 0.05) return;
-    const next = facingFromDelta(dx, dy, characterStandFacing(player.characterId));
+    const next = facingFromDelta(
+      dx,
+      dy,
+      characterStandFacing(player.characterId),
+    );
     setFacing((prev) => (prev === next ? prev : next));
-    setPoseFallback('pose');
   }, [layout.x, layout.y, player.characterId]);
+
+  useEffect(() => {
+    setPoseFallback('pose');
+  }, [facing]);
 
   useEffect(() => {
     const moved =

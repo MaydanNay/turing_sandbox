@@ -6,6 +6,8 @@ import {
   type FurnitureTableLayout,
 } from '@/data/outpostFurniture';
 import { getActiveFurniture } from '@/utils/furnitureRuntime';
+import { OUTPOST_SCENE_ASPECT } from '@/utils/sceneCover';
+import { getActiveStandingSpots } from '@/utils/standingSpotsRuntime';
 
 /** Координаты % внутри группы сцены (стол + кольцо стульев) */
 export interface SeatLayout {
@@ -29,31 +31,28 @@ export const SCENE_GROUP = OUTPOST_FURNITURE_GROUP;
 
 /** Базовая ширина спрайта стула, % от ширины SCENE_GROUP */
 export const SEAT_BASE_WIDTH = 12;
+/** Anchor Y for seat sprites — keep in sync with SeatSprite transform */
+export const SEAT_ANCHOR_Y = 0.88;
+/** empty/occupied seat PNG 174×214 */
+export const SEAT_SPRITE_ASPECT = 214 / 174;
+/** table.png 608×349 */
+export const TABLE_SPRITE_ASPECT = 349 / 608;
 
 export const PREVIEW_EMPTY_SEATS = false;
 export const PREVIEW_OUTPOST_STANDING = false;
 export const OUTPOST_BASE_WIDTH = 9;
 
+/** @deprecated Prefer getActiveStandingSpots() / getOutpostSpot() */
 export const OUTPOST_LAYOUT = {
-  /** Spawn / stand points in full-scene % — must stay outside table+chairs. */
-  spots: [
-    { x: 10, y: 34, scale: 0.95 }, // 01 vance — left consoles
-    { x: 28, y: 18, scale: 0.92 }, // 02 cole — top
-    { x: 72, y: 20, scale: 0.9 }, // 03 martha — top-right
-    { x: 88, y: 42, scale: 0.88 }, // 04 penny — right
-    { x: 86, y: 68, scale: 0.93 }, // 05 gwen — bottom-right
-    { x: 58, y: 78, scale: 0.9 }, // 06 logan — bottom
-    { x: 12, y: 62, scale: 0.85 }, // 07 chester — bottom-left
-    { x: 22, y: 78, scale: 0.88 }, // 08 roxy — bottom-left floor
-  ] satisfies SeatLayout[],
+  get spots() {
+    return getActiveStandingSpots();
+  },
 } as const;
 
 export function getOutpostSpot(seatNumber: number): SeatLayout {
+  const spots = getActiveStandingSpots();
   const index = seatNumber - 1;
-  return (
-    OUTPOST_LAYOUT.spots[index] ??
-    OUTPOST_LAYOUT.spots[0] ?? { x: 50, y: 50, scale: 0.9 }
-  );
+  return spots[index] ?? spots[0] ?? { x: 50, y: 50, scale: 0.9 };
 }
 
 export function getSceneGroup(): {
@@ -78,6 +77,10 @@ export const SCENE_LAYOUT = {
   table: OUTPOST_FURNITURE_TABLE as TableLayout,
 } as const;
 
+/**
+ * Group is a CSS square (width = widthPercent of scene width).
+ * Scene Y% must scale by aspect so 1% group-Y maps to the same pixels as 1% group-X.
+ */
 export function seatLayoutToScenePos(
   seat: { x: number; y: number },
   group: { x: number; y: number; widthPercent: number } = getSceneGroup(),
@@ -85,7 +88,7 @@ export function seatLayoutToScenePos(
   const w = group.widthPercent;
   return {
     x: group.x + (seat.x / 100 - 0.5) * w,
-    y: group.y + (seat.y / 100 - 0.5) * w,
+    y: group.y + (seat.y / 100 - 0.5) * w * OUTPOST_SCENE_ASPECT,
   };
 }
 
@@ -96,7 +99,7 @@ export function scenePosToSeatLocal(
   const w = group.widthPercent;
   return {
     x: ((scene.x - group.x) / w + 0.5) * 100,
-    y: ((scene.y - group.y) / w + 0.5) * 100,
+    y: ((scene.y - group.y) / (w * OUTPOST_SCENE_ASPECT) + 0.5) * 100,
   };
 }
 

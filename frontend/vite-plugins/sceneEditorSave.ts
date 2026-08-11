@@ -8,6 +8,7 @@ const ALLOWED = {
   walk: 'src/data/outpostWalkMask.json',
   objects: 'src/data/outpostSceneObjects.json',
   furniture: 'src/data/outpostFurniture.json',
+  standing: 'src/data/outpostStandingSpots.json',
 } as const;
 
 type SaveKey = keyof typeof ALLOWED;
@@ -155,10 +156,24 @@ function validateObjects(data: unknown): string | null {
   return null;
 }
 
+function validateStanding(data: unknown): string | null {
+  if (!Array.isArray(data)) return 'standing: root must be array';
+  if (data.length !== 8) return 'standing: need exactly 8 spots';
+  for (const s of data) {
+    if (typeof s !== 'object' || s === null) return 'standing: invalid spot';
+    const spot = s as { x?: unknown; y?: unknown; scale?: unknown };
+    if (!isNum(spot.x) || !isNum(spot.y) || !isNum(spot.scale)) {
+      return 'standing: x/y/scale must be numbers';
+    }
+  }
+  return null;
+}
+
 const VALIDATORS: Record<SaveKey, (data: unknown) => string | null> = {
   walk: validateWalk,
   furniture: validateFurniture,
   objects: validateObjects,
+  standing: validateStanding,
 };
 
 function readBody(req: Connect.IncomingMessage): Promise<string> {

@@ -18,6 +18,7 @@ export const ASSETS = {
     outpostNight: '/assets/locations/outpost-night.png',
     menu: '/assets/locations/menu.png',
     brig: '/assets/locations/brig.png',
+    terminal: '/assets/locations/terminal.svg',
   },
   table: {
     round: '/assets/table/table.png',

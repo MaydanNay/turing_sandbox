@@ -11,6 +11,7 @@ import {
 } from '@/data/gamePhaseConfig';
 import type { HudPlayerSlot } from '@/data/mockHud';
 import { useDeadlineCountdown, usePhaseCountdown } from '@/hooks/usePhaseCountdown';
+import { useGameStore } from '@/store/gameStore';
 import type { GamePhase } from '@/types/game';
 import { revealTypeLabel } from '@/utils/cardArt';
 import type { CardType } from '@/types/card';
@@ -124,14 +125,21 @@ export function GameProcessPanel({
   const localRemaining = usePhaseCountdown(initialSeconds, resetKey);
   const serverPhaseRemaining = useDeadlineCountdown(phaseDeadlineTs);
   const serverRevealRemaining = useDeadlineCountdown(revealDeadlineTs);
-  const useRevealClock = revealTurnClock && revealDeadlineTs != null;
+  const voteOpen = useGameStore((s) => s.voteOpen);
+  const useRevealClock = revealTurnClock && revealDeadlineTs != null && !voteOpen;
   const useServerPhaseClock = phaseDeadlineTs != null && !useRevealClock;
+  const phaseRemainingForVote =
+    phaseDeadlineTs != null ? serverPhaseRemaining : localRemaining;
   const remaining = useRevealClock
     ? serverRevealRemaining
     : useServerPhaseClock
       ? serverPhaseRemaining
       : localRemaining;
-  const voting = forceVoting || isInVoteWindow(phase, remaining, phaseDurationSec);
+  const voting =
+    forceVoting ||
+    voteOpen ||
+    phase === 'VOTE' ||
+    isInVoteWindow(phase, phaseRemainingForVote, phaseDurationSec);
 
   const showReveal =
     gatheredAtTable && revealPlayer != null && isRevealPhase(phase) && !voting;

@@ -1,6 +1,9 @@
 /** Dev scene-editor UI flags (live while WalkEditorOverlay is mounted). */
 
+export type SceneEditorMode = 'props' | 'polygons' | 'characters';
+
 let showPlayers = true;
+let editorMode: SceneEditorMode = 'props';
 let version = 0;
 const listeners = new Set<() => void>();
 
@@ -19,8 +22,19 @@ export function getEditorShowPlayers(): boolean {
   return showPlayers;
 }
 
+export function setEditorMode(mode: SceneEditorMode): void {
+  if (editorMode === mode) return;
+  editorMode = mode;
+  emit();
+}
+
+export function getEditorMode(): SceneEditorMode {
+  return editorMode;
+}
+
 export function resetEditorUiFlags(): void {
   showPlayers = true;
+  editorMode = 'props';
   emit();
 }
 

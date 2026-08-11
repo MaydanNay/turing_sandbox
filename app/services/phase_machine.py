@@ -234,13 +234,24 @@ async def tick_room(room_id: str) -> RoomState | None:
 
     state = await tick_match_flow(room_id, state)
 
+    # A+B: Карцер полный во время посадки → Конвой уезжает сразу
+    if (
+        state.phase == Phase.resolve
+        and len(state.brig_character_ids) >= settings.brig_capacity
+    ):
+        from app.services.match_epilogue import finalize_match
+
+        return await finalize_match(room_id)
+
     if time.time() < (state.phase_deadline_ts or 0):
         return state
 
-    # Boarding window over → convoy audit + session finish (brig full never ends early)
+    # Boarding window over → convoy audit (everyone not in brig boards)
     if state.phase == Phase.resolve:
         from app.services.match_epilogue import finalize_match
 
+        if state.vote_open or state.votes:
+            state = await resolve_votes(room_id, state)
         return await finalize_match(room_id)
 
     # End of vote-capable phase: never skip the window if the tick jumped over it

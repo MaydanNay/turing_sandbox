@@ -64,20 +64,9 @@ def _inbound_action(data: dict[str, Any]) -> str:
 
 
 async def _send_hand(room_id: str, client_id: str) -> None:
-    hand = await redis_store.ensure_hand(room_id, client_id)
-    if hand is None:
-        return
-    await manager.send_personal(
-        room_id,
-        client_id,
-        {
-            "type": "hand",
-            "room_id": room_id,
-            "client_id": client_id,
-            "cards": hand,
-            "ts": _now_iso(),
-        },
-    )
+    from app.services.hand_push import push_hand_to_client
+
+    await push_hand_to_client(room_id, client_id)
 
 
 async def _send_revealed_sync(room_id: str, client_id: str) -> None:

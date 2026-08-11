@@ -279,6 +279,9 @@ class RedisStateStore:
             if not state.hands_dealt:
                 await self.deal_hands(room_id)
                 state = await self.ensure_room(room_id)
+                from app.services.hand_push import push_hands_to_humans
+
+                await push_hands_to_humans(room_id)
             return state
 
         client_ids = list(state.players.keys())
@@ -316,8 +319,10 @@ class RedisStateStore:
             {cid: (p.faction.value if p.faction else None) for cid, p in state.players.items()},
         )
         await self.deal_hands(room_id)
+        from app.services.hand_push import push_hands_to_humans
         from app.services.phase_machine import start_match_from_init
 
+        await push_hands_to_humans(room_id)
         started = await start_match_from_init(room_id)
         return started or await self.ensure_room(room_id)
 

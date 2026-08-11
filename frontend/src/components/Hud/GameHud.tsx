@@ -144,12 +144,11 @@ export function GameHud({
   const localRemaining = usePhaseCountdown(initialSeconds, resetKey);
   const serverPhaseRemaining = useDeadlineCountdown(phaseDeadlineTs);
   const serverRevealRemaining = useDeadlineCountdown(revealDeadlineTs);
-  const remaining =
-    revealDeadlineTs != null && revealTurnClock
-      ? serverRevealRemaining
-      : phaseDeadlineTs != null
-        ? serverPhaseRemaining
-        : localRemaining;
+  // Vote window must use PHASE clock — reveal turn seconds falsely open the vote UI
+  const phaseRemainingForVote =
+    phaseDeadlineTs != null ? serverPhaseRemaining : localRemaining;
+  void revealTurnClock;
+  void serverRevealRemaining;
 
   const handleMockStartVoting = useCallback(() => {
     setForceVoting(true);
@@ -162,7 +161,7 @@ export function GameHud({
     forceVoting ||
     voteOpen ||
     gamePhase === 'VOTE' ||
-    isInVoteWindow(gamePhase, remaining, phaseDurationSec);
+    isInVoteWindow(gamePhase, phaseRemainingForVote, phaseDurationSec);
 
   const forcePanelOpen = effectiveMyRevealTurn || isVotingMode;
   const wasForceOpen = useRef(false);

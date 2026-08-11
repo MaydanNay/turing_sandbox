@@ -56,6 +56,8 @@ class RoomState(BaseModel):
     # client_id → character_id
     votes: dict[str, str] = Field(default_factory=dict)
     vote_open: bool = False
+    # End of current vote round (boarding cycles use short windows)
+    vote_deadline_ts: float | None = None
     # Reveal turn queue (client_ids)
     reveal_queue: list[str] = Field(default_factory=list)
     reveal_index: int = 0

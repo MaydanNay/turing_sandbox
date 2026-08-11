@@ -1,4 +1,5 @@
 import type { FurnitureLayout } from '@/data/outpostFurniture';
+import type { StandingSpot } from '@/data/outpostStandingSpots';
 import type { SceneObjectPlacement } from '@/data/outpostSceneObjects';
 import type { WalkPoint } from '@/data/outpostWalkMask';
 
@@ -68,6 +69,18 @@ export function serializeFurniture(layout: FurnitureLayout): FurnitureLayout {
   };
 }
 
+export function serializeStandingSpots(spots: StandingSpot[]): StandingSpot[] {
+  return spots.map((s) => {
+    const row: StandingSpot = {
+      x: round1(s.x),
+      y: round1(s.y),
+      scale: round1(s.scale),
+    };
+    if (s.behindTable) row.behindTable = true;
+    return row;
+  });
+}
+
 export function serializeSceneObjects(
   objects: SceneObjectPlacement[],
 ): SceneObjectPlacement[] {
@@ -113,6 +126,19 @@ export function validateFurnitureData(data: unknown): string | null {
   for (const s of d.seats) {
     if (!isNum(s.x) || !isNum(s.y) || !isNum(s.scale)) {
       return 'furniture: invalid seat';
+    }
+  }
+  return null;
+}
+
+export function validateStandingSpotsData(data: unknown): string | null {
+  if (!Array.isArray(data)) return 'standing: root must be array';
+  if (data.length !== 8) return 'standing: need exactly 8 spots';
+  for (const s of data) {
+    if (typeof s !== 'object' || s === null) return 'standing: invalid spot';
+    const spot = s as StandingSpot;
+    if (!isNum(spot.x) || !isNum(spot.y) || !isNum(spot.scale)) {
+      return 'standing: x/y/scale must be numbers';
     }
   }
   return null;

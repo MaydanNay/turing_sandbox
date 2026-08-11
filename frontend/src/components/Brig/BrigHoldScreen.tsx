@@ -1,4 +1,5 @@
 import { useDeadlineCountdown } from '@/hooks/usePhaseCountdown';
+import { useT } from '@/i18n';
 
 function formatCountdown(totalSeconds: number): string {
   const clamped = Math.max(0, totalSeconds);
@@ -17,8 +18,7 @@ interface BrigHoldScreenProps {
 }
 
 /**
- * Карцер: пустой чёрный экран. Игрок ждёт закрытия шлюза или выходит в лобби.
- * Leave здесь не заканчивает матч для остальных — только disconnect клиента.
+ * Карцер: пустой чёрный экран. Выход в лобби — только после аудита Конвоя.
  */
 export function BrigHoldScreen({
   waitingForConvoy,
@@ -26,20 +26,22 @@ export function BrigHoldScreen({
   outcomeLine = null,
   onLeave,
 }: BrigHoldScreenProps) {
+  const t = useT();
   const remaining = useDeadlineCountdown(phaseDeadlineTs);
+  const canLeave = Boolean(onLeave && !waitingForConvoy);
 
   return (
     <div className="pointer-events-auto absolute inset-0 z-[12000] flex flex-col bg-black">
       <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
         <p className="font-mono text-[10px] font-bold uppercase tracking-[0.35em] text-white/35">
-          Карцер
+          {t('game.brigTitle')}
         </p>
         <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/55">
           {waitingForConvoy
             ? phaseDeadlineTs != null
-              ? 'Изоляция до отбытия Конвоя. Экран пуст — вы вне игры за столом.'
-              : 'Вы в Карцере. Изоляция до Конвоя — стол идёт без вас.'
-            : 'Конвой ушёл. Вы остались в Карцере.'}
+              ? t('game.brigWaitBoarding')
+              : t('game.brigIsolated')
+            : t('game.brigLeftBehind')}
         </p>
         {waitingForConvoy && phaseDeadlineTs != null && (
           <p className="mt-8 font-mono text-3xl tabular-nums text-white/40">
@@ -53,18 +55,15 @@ export function BrigHoldScreen({
 
       <div className="flex flex-col gap-3 px-6 pb-10 sm:mx-auto sm:w-full sm:max-w-sm">
         {waitingForConvoy && (
-          <p className="text-center text-[11px] text-white/30">
-            Ждать — просто оставайтесь на экране. Выйти — только ваш клиент, матч для остальных
-            продолжается.
-          </p>
+          <p className="text-center text-[11px] text-white/30">{t('game.brigWaitHint')}</p>
         )}
-        {onLeave && (
+        {canLeave && (
           <button
             type="button"
             onClick={onLeave}
             className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-white/80 transition hover:border-white/40 hover:bg-white/10"
           >
-            Выйти в лобби
+            {t('game.toLobby')}
           </button>
         )}
       </div>

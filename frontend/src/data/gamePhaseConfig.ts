@@ -76,7 +76,7 @@ export const GAME_PHASE_CONFIG: Record<GamePhase, GamePhaseMeta> = {
   RESOLVE: {
     round: null,
     title: 'Эпилог',
-    subtitle: 'Конвой прибыл · посадка 3 минуты',
+    subtitle: 'Конвой прибыл · Карцер 3 или таймер · 1 Синтетик = проигрыш',
     durationSeconds: 180,
     format: 'epilogue',
   },

@@ -16,10 +16,19 @@ import {
   seatZIndex,
   tableZIndex,
 } from '@/utils/seatPositions';
+import {
+  getStandingSpotsVersion,
+  subscribeStandingSpots,
+} from '@/utils/standingSpotsRuntime';
 
 /** Static table/chairs (+ optional chibi preview) for the standalone scene editor. */
 export function OutpostEditorStage({ showPlayers }: { showPlayers: boolean }) {
   useSyncExternalStore(subscribeFurniture, getFurnitureVersion, getFurnitureVersion);
+  useSyncExternalStore(
+    subscribeStandingSpots,
+    getStandingSpotsVersion,
+    getStandingSpotsVersion,
+  );
   const group = getSceneGroup();
   const { seats, table } = getSceneLayout();
 
