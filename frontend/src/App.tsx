@@ -7,6 +7,7 @@ import { LobbyScreen } from '@/components/LobbyScreen';
 import { SessionHistoryScreen } from '@/components/SessionHistoryScreen';
 import { playChatSendSoundEffect } from '@/hooks/useGeneralChatEffects';
 import { useT } from '@/i18n';
+import { SceneEditorPage } from '@/pages/SceneEditorPage';
 import { useWebSocket } from '@/providers/WebSocketProvider';
 import { useGameStore } from '@/store/gameStore';
 import { useOutpostMovementStore } from '@/store/outpostMovementStore';
@@ -23,6 +24,24 @@ import {
 } from '@/store/sessionPersistence';
 
 type AppMode = 'lobby' | 'history' | 'live';
+
+/** DEV-only dedicated editor at /scene-editor (also ?walkEdit=1 / ?sceneEdit=1). */
+function shouldOpenSceneEditor(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (!import.meta.env.DEV) return false;
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/scene-editor') return true;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('walkEdit') === '1' || params.get('sceneEdit') === '1') {
+      window.history.replaceState({}, '', '/scene-editor');
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
 
 function buildSnapshot(mode: PersistMode): UiSnapshot | null {
   const game = useGameStore.getState();
@@ -64,6 +83,13 @@ function hydrateOutpostFromSnapshot(snap: UiSnapshot | null): void {
 }
 
 export default function App() {
+  if (shouldOpenSceneEditor()) {
+    return <SceneEditorPage />;
+  }
+  return <AppMain />;
+}
+
+function AppMain() {
   const t = useT();
   const [mode, setMode] = useState<AppMode>('lobby');
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);

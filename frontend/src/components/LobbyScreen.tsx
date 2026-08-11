@@ -2,7 +2,7 @@ import { Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { createSession, joinSessionByInvite } from '@/api/sessions';
-import { playUiSound } from '@/audio/uiSounds';
+import { playUiSound, refreshUiSoundMaster } from '@/audio/uiSounds';
 import { ASSETS } from '@/config/assets';
 import { generateClientId } from '@/config/env';
 import { useT } from '@/i18n';
@@ -109,13 +109,8 @@ function ModePicker({
             <button
               type="button"
               disabled={loadingLive}
-              onMouseEnter={() => {
-                if (modeIndex !== index) {
-                  playUiSound('character');
-                  setModeIndex(index);
-                }
-              }}
               onClick={() => {
+                if (modeIndex === index) return;
                 playUiSound('character');
                 setModeIndex(index);
               }}
@@ -127,7 +122,7 @@ function ModePicker({
                 className={`pointer-events-none absolute inset-y-0 -left-6 right-0 transition-all duration-200 sm:-left-10 ${
                   selected
                     ? 'bg-gradient-to-l from-amber-300/35 via-amber-200/20 to-transparent'
-                    : 'bg-transparent'
+                    : 'bg-transparent group-hover:from-white/5 group-hover:via-white/5 group-hover:to-transparent'
                 }`}
                 aria-hidden
               />
@@ -194,6 +189,10 @@ export function LobbyScreen({
   const t = useT();
   const language = useSettingsStore((s) => s.language);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
+  const soundEnabled = useSettingsStore((s) => s.soundEnabled);
+  const soundVolume = useSettingsStore((s) => s.soundVolume);
+  const setSoundEnabled = useSettingsStore((s) => s.setSoundEnabled);
+  const setSoundVolume = useSettingsStore((s) => s.setSoundVolume);
 
   const matchModes = useMemo(
     () =>
@@ -459,7 +458,7 @@ export function LobbyScreen({
   const startLabel = view === 'create_room' ? t('lobby.create') : t('lobby.start');
 
   return (
-    <div className="relative h-full min-h-screen w-full overflow-hidden bg-black text-white">
+    <div className="fixed inset-0 overflow-hidden bg-black text-white">
       <img
         src={ASSETS.locations.menu}
         alt=""
@@ -478,8 +477,8 @@ export function LobbyScreen({
         aria-hidden
       />
 
-      <div className="relative z-10 flex h-full min-h-screen flex-col">
-        <div className="flex flex-1 flex-col justify-end pb-16 pl-8 sm:pb-20 sm:pl-14 md:pl-20 lg:pb-24">
+      <div className="relative z-10 flex h-full w-full flex-col">
+        <div className="flex flex-1 flex-col justify-end pb-14 pl-8 sm:pb-16 sm:pl-14 md:pl-20 lg:pb-20">
           <div className="max-w-2xl">
             <p className="font-menu text-base font-light italic tracking-[0.28em] text-white/80 sm:text-lg">
               The Outpost
@@ -493,7 +492,11 @@ export function LobbyScreen({
         </div>
 
         <nav
-          className="absolute right-8 top-[42%] w-[min(92vw,340px)] -translate-y-1/2 sm:right-12 sm:w-[min(42vw,380px)] md:right-16 lg:right-20"
+          className={
+            view === 'settings'
+              ? 'absolute bottom-8 right-6 top-6 z-20 flex w-[min(92vw,400px)] flex-col sm:right-10 md:right-14 lg:right-16'
+              : 'absolute right-8 top-[42%] w-[min(92vw,340px)] -translate-y-1/2 sm:right-12 sm:w-[min(42vw,380px)] md:right-16 lg:right-20'
+          }
           aria-label="Main menu"
         >
           {view === 'main' ? (
@@ -518,17 +521,15 @@ export function LobbyScreen({
               ))}
             </ul>
           ) : view === 'settings' ? (
-            <div className="flex flex-col items-end gap-4">
-              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200/80">
+            <div className="flex min-h-0 flex-1 flex-col items-end gap-2.5 overflow-y-auto overscroll-contain pb-2 pr-1">
+              <p className="shrink-0 font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200/80">
                 {t('settings.title')}
               </p>
-              <p className="max-w-[16rem] text-right font-mono text-[10px] leading-relaxed text-white/45">
-                {t('settings.languageHint')}
-              </p>
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
+
+              <p className="shrink-0 font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
                 {t('settings.language')}
               </p>
-              <ul className="flex w-full flex-col items-end gap-1">
+              <ul className="flex w-full shrink-0 flex-col items-end gap-0.5">
                 <li className="w-full">
                   <LanguageOption
                     active={language === 'en'}
@@ -544,13 +545,87 @@ export function LobbyScreen({
                   />
                 </li>
               </ul>
+
+              <div className="mt-1 w-full shrink-0 border-t border-white/10 pt-3">
+                <p className="text-right font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
+                  {t('settings.sound')}
+                </p>
+
+                <div className="mt-2 flex w-full justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSoundEnabled(true);
+                      refreshUiSoundMaster();
+                      playUiSound('character');
+                    }}
+                    className={`rounded-md border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider transition ${
+                      soundEnabled
+                        ? 'border-amber-300/45 bg-amber-500/20 text-amber-100'
+                        : 'border-white/15 bg-white/5 text-white/50 hover:text-white/80'
+                    }`}
+                  >
+                    {t('settings.soundOn')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSoundEnabled(false);
+                      refreshUiSoundMaster();
+                    }}
+                    className={`rounded-md border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider transition ${
+                      !soundEnabled
+                        ? 'border-amber-300/45 bg-amber-500/20 text-amber-100'
+                        : 'border-white/15 bg-white/5 text-white/50 hover:text-white/80'
+                    }`}
+                  >
+                    {t('settings.soundOff')}
+                  </button>
+                </div>
+
+                <label className="mt-3 flex w-full flex-col items-end gap-1.5">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-white/45">
+                    {t('settings.volume')} · {Math.round(soundVolume * 100)}%
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={Math.round(soundVolume * 100)}
+                    disabled={!soundEnabled}
+                    onChange={(e) => {
+                      const next = Number(e.target.value) / 100;
+                      setSoundVolume(next);
+                      refreshUiSoundMaster();
+                    }}
+                    onMouseUp={() => {
+                      if (soundEnabled) playUiSound('table');
+                    }}
+                    onTouchEnd={() => {
+                      if (soundEnabled) playUiSound('table');
+                    }}
+                    className="h-1.5 w-full max-w-[260px] cursor-pointer appearance-none rounded-full bg-white/15 accent-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  disabled={!soundEnabled || soundVolume <= 0}
+                  onClick={() => playUiSound('table')}
+                  className="mt-2 font-mono text-[10px] uppercase tracking-wider text-amber-200/70 transition hover:text-amber-100 disabled:opacity-30"
+                >
+                  {t('settings.testSound')}
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => {
                   playUiSound('character');
                   setView('main');
                 }}
-                className="mt-2 font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
+                className="mt-auto shrink-0 pt-3 font-mono text-[10px] uppercase tracking-wider text-white/40 transition hover:text-white/70"
               >
                 {t('menu.back')}
               </button>
@@ -614,7 +689,7 @@ export function LobbyScreen({
                 modes={[...matchModes]}
               />
 
-              <div className="mt-2 flex w-full flex-col items-end gap-2">
+              <div className="mt-5 flex w-full flex-col items-end gap-2">
                 <button
                   type="button"
                   disabled={loadingLive}
@@ -652,14 +727,20 @@ export function LobbyScreen({
             </div>
           )}
 
-          {displayError && (
+          {displayError && view === 'main' && (
             <p className="mt-6 text-right font-mono text-xs text-red-300/90">
               {displayError}
             </p>
           )}
         </nav>
 
-        <footer className="mt-auto flex items-end justify-between px-6 pb-5 sm:px-10 sm:pb-7">
+        {displayError && view !== 'main' && (
+          <p className="pointer-events-none absolute bottom-16 left-8 right-[min(92vw,420px)] z-20 max-w-md font-mono text-xs text-red-300/90 sm:left-14">
+            {displayError}
+          </p>
+        )}
+
+        <footer className="pointer-events-none absolute bottom-4 left-6 z-10 sm:bottom-5 sm:left-10">
           <p className="font-mono text-[10px] text-white/35 sm:text-[11px]">
             social deduction · helixa · maydi
           </p>

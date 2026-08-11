@@ -4,7 +4,7 @@ import {
   type WalkPoint,
 } from '@/data/outpostWalkMask';
 
-/** Live override while ?walkEdit=1 — so playtest uses editor polys before Copy JSON. */
+/** Live override while scene editor is open — playtest polys before Copy JSON. */
 let liveWalk: WalkPoint[][] | null = null;
 let liveBlock: WalkPoint[][] | null = null;
 

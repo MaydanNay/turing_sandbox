@@ -1,3 +1,5 @@
+import { useSettingsStore } from '@/store/settingsStore';
+
 export type UiSoundKind =
   | 'table'
   | 'character'
@@ -11,12 +13,22 @@ const VOLUME = 0.28;
 const CARD_HOVER_COOLDOWN_MS = 75;
 
 let audioCtx: AudioContext | null = null;
+let masterGain: GainNode | null = null;
 let lastCardHoverAt = 0;
+
+function syncMasterGain(): void {
+  if (!masterGain) return;
+  const { soundEnabled, soundVolume } = useSettingsStore.getState();
+  masterGain.gain.value = soundEnabled ? soundVolume : 0;
+}
 
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
 
-  const Ctx = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const Ctx =
+    window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
   if (!Ctx) return null;
 
   if (!audioCtx) {
@@ -27,7 +39,22 @@ function getAudioContext(): AudioContext | null {
     void audioCtx.resume();
   }
 
+  if (!masterGain) {
+    masterGain = audioCtx.createGain();
+    masterGain.connect(audioCtx.destination);
+    syncMasterGain();
+  }
+
   return audioCtx;
+}
+
+function getMasterOut(ctx: AudioContext): AudioNode {
+  if (!masterGain) {
+    masterGain = ctx.createGain();
+    masterGain.connect(ctx.destination);
+  }
+  syncMasterGain();
+  return masterGain;
 }
 
 function gainEnvelope(
@@ -240,10 +267,18 @@ export function playCardHoverSoundEffect(): void {
 /** Короткий UI-звук по типу клика (Web Audio, без файлов). */
 export function playUiSound(kind: UiSoundKind): void {
   try {
+    const { soundEnabled, soundVolume } = useSettingsStore.getState();
+    if (!soundEnabled || soundVolume <= 0) return;
+
     const ctx = getAudioContext();
     if (!ctx) return;
-    PLAYERS[kind](ctx, ctx.destination);
+    PLAYERS[kind](ctx, getMasterOut(ctx));
   } catch {
     /* звук необязателен */
   }
+}
+
+/** Apply current settings to the live master gain (call after slider changes). */
+export function refreshUiSoundMaster(): void {
+  syncMasterGain();
 }

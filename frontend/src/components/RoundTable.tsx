@@ -1,5 +1,12 @@
 import { AnimatePresence } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { MouseEvent } from 'react';
 
 import { playUiSound } from '@/audio/uiSounds';
@@ -7,21 +14,26 @@ import { EmptySeatSprite, SeatSprite } from '@/components/SeatSprite';
 import { FloorClickMarker } from '@/components/FloorClickMarker';
 import { StandingCharacterSprite } from '@/components/StandingCharacterSprite';
 import { ASSETS } from '@/config/assets';
+import { SceneObjectsLayer } from '@/components/SceneObjectsLayer';
 import { CHARACTERS } from '@/data/characters';
 import { useWasdMovement } from '@/hooks/useWasdMovement';
 import { useWebSocket } from '@/providers/WebSocketProvider';
 import { useOutpostMovementStore } from '@/store/outpostMovementStore';
 import type { Player } from '@/types/game';
 import {
+  getFurnitureVersion,
+  subscribeFurniture,
+} from '@/utils/furnitureRuntime';
+import {
   clampPlayerClick,
   isWalkableOutpostPoint,
 } from '@/utils/outpostCollision';
 import {
   getOutpostSpot,
+  getSceneGroup,
+  getSceneLayout,
   PREVIEW_EMPTY_SEATS,
   PREVIEW_OUTPOST_STANDING,
-  SCENE_GROUP,
-  SCENE_LAYOUT,
   seatLayoutToScenePos,
   seatZIndex,
   tableZIndex,
@@ -64,6 +76,10 @@ export function RoundTable({
   onOpenPrivateChat,
   privateChatAtSeats = false,
 }: RoundTableProps) {
+  useSyncExternalStore(subscribeFurniture, getFurnitureVersion, getFurnitureVersion);
+  const sceneGroup = getSceneGroup();
+  const sceneLayout = getSceneLayout();
+
   const playerBySeat = playersBySeat(players);
   const showChibi = !gatheredAtTable && !PREVIEW_EMPTY_SEATS;
   const showSeated = gatheredAtTable && !PREVIEW_OUTPOST_STANDING;
@@ -201,7 +217,7 @@ export function RoundTable({
       const self = players.find((p) => p.id === selfId);
       if (!self || self.tablePosition !== seatNumber - 1) return;
 
-      const seat = SCENE_LAYOUT.seats[seatNumber - 1];
+      const seat = sceneLayout.seats[seatNumber - 1];
       if (!seat) return;
       const scenePos = seatLayoutToScenePos(seat);
       playUiSound('table');
@@ -234,6 +250,7 @@ export function RoundTable({
       selfId,
       seatedSet,
       players,
+      sceneLayout,
       setPendingSit,
       setTarget,
       clearPendingSit,
@@ -254,7 +271,7 @@ export function RoundTable({
     [advancePath, clearPendingSit, onSitSelf],
   );
 
-  const seatEntries = Object.values(SCENE_LAYOUT.seats).map((layout, index) => {
+  const seatEntries = sceneLayout.seats.map((layout, index) => {
     return {
       seatNumber: index + 1,
       layout,
@@ -337,9 +354,9 @@ export function RoundTable({
     <div
       className="absolute"
       style={{
-        left: `${SCENE_LAYOUT.table.x + (SCENE_LAYOUT.table.offsetX ?? 0)}%`,
-        top: `${SCENE_LAYOUT.table.y + (SCENE_LAYOUT.table.offsetY ?? 0)}%`,
-        width: `${SCENE_LAYOUT.table.widthPercent}%`,
+        left: `${sceneLayout.table.x + (sceneLayout.table.offsetX ?? 0)}%`,
+        top: `${sceneLayout.table.y + (sceneLayout.table.offsetY ?? 0)}%`,
+        width: `${sceneLayout.table.widthPercent}%`,
         zIndex: tableZIndex(),
         transform: 'translate(-50%, -50%)',
       }}
@@ -421,6 +438,8 @@ export function RoundTable({
         className="absolute inset-0 h-full w-full"
       />
 
+      <SceneObjectsLayer />
+
       {!gatheredAtTable && (
         <button
           type="button"
@@ -453,12 +472,12 @@ export function RoundTable({
           <div
             className="pointer-events-none absolute"
             style={{
-              left: `${SCENE_GROUP.x}%`,
-              top: `${SCENE_GROUP.y}%`,
-              width: `${SCENE_GROUP.widthPercent}%`,
+              left: `${sceneGroup.x}%`,
+              top: `${sceneGroup.y}%`,
+              width: `${sceneGroup.widthPercent}%`,
               aspectRatio: '1 / 1',
-              marginLeft: `-${SCENE_GROUP.widthPercent / 2}%`,
-              marginTop: `-${SCENE_GROUP.widthPercent / 2}%`,
+              marginLeft: `-${sceneGroup.widthPercent / 2}%`,
+              marginTop: `-${sceneGroup.widthPercent / 2}%`,
               // NO transform, NO z-index to avoid creating a new stacking context!
             }}
           >

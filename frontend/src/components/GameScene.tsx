@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { BottomHand } from '@/components/Hand';
 import { BrigGrid } from '@/components/Brig/BrigGrid';
@@ -14,7 +14,6 @@ import { PrivateChatOverlay } from '@/components/PrivateChat';
 import { RoundTable } from '@/components/RoundTable';
 import { SceneCoverFrame } from '@/components/SceneCoverFrame';
 import { TableMeetingModal } from '@/components/TableMeetingModal';
-import { isWalkEditEnabled, WalkEditorOverlay } from '@/components/WalkEditorOverlay';
 import { useGeneralChatEffects } from '@/hooks/useGeneralChatEffects';
 import { cardRevealLabel } from '@/utils/cardLabel';
 import { useWebSocket } from '@/providers/WebSocketProvider';
@@ -93,7 +92,6 @@ export function GameScene({
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const wasGatheredRef = useRef(false);
   const mockPrivatePingRef = useRef(false);
-  const walkEdit = useMemo(() => isWalkEditEnabled(), []);
 
   const selfClientId = clientId ?? myProfile?.id ?? null;
   const isMyTurnToReveal = mockMode
@@ -370,7 +368,6 @@ export function GameScene({
           onOpenPrivateChat={handleCharacterPress}
           privateChatAtSeats={privateChatAtSeats}
         />
-        {walkEdit && <WalkEditorOverlay />}
       </SceneCoverFrame>
 
       <TableMeetingModal
@@ -428,7 +425,7 @@ export function GameScene({
         )}
       </div>
 
-      {!gatheredAtTable && !walkEdit && (
+      {!gatheredAtTable && (
         <BottomHand
           cards={handCards}
           revealMode={false}

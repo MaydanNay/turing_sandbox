@@ -1,0 +1,24 @@
+{
+  "group": {
+    "x": 35,
+    "y": 51,
+    "widthPercent": 90
+  },
+  "seats": [
+    { "x": 68, "y": 49, "scale": 0.85, "behindTable": true },
+    { "x": 80, "y": 52, "scale": 0.88, "behindTable": true },
+    { "x": 86, "y": 58, "scale": 0.9, "behindTable": true },
+    { "x": 81, "y": 69, "scale": 0.93 },
+    { "x": 68, "y": 73, "scale": 0.95 },
+    { "x": 52, "y": 69, "scale": 0.93 },
+    { "x": 47, "y": 58, "scale": 0.9, "behindTable": true },
+    { "x": 54, "y": 52, "scale": 0.88, "behindTable": true }
+  ],
+  "table": {
+    "x": 67,
+    "y": 60,
+    "widthPercent": 38,
+    "offsetX": 0,
+    "offsetY": -2
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "vance": { "seat": 1, "standFacing": "left" },
+  "cole": { "seat": 2, "standFacing": "left" },
+  "martha": { "seat": 3, "standFacing": "right" },
+  "penny": { "seat": 4, "standFacing": "left" },
+  "gwen": { "seat": 5, "standFacing": "left" },
+  "logan": { "seat": 6, "standFacing": "left" },
+  "chester": { "seat": 7, "standFacing": "left" },
+  "roxy": { "seat": 8, "standFacing": "left" }
+}

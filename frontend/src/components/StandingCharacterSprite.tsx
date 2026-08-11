@@ -10,8 +10,12 @@ import {
   playerNameplateLabel,
 } from '@/components/PlayerTargetMark';
 import { PrivateMessageBadge } from '@/components/PrivateChat/PrivateMessageBadge';
-import { ASSETS } from '@/config/assets';
-import { genderLabel } from '@/data/characters';
+import { ASSETS, type CharacterStandFacing } from '@/config/assets';
+import {
+  characterStandFacing,
+  facingFromDelta,
+  genderLabel,
+} from '@/data/characters';
 import { useGameStore } from '@/store/gameStore';
 import {
   moveDurationSeconds,
@@ -37,6 +41,8 @@ const CHIBI_ANCHOR = {
   transform: 'translateX(-50%) translateY(-92%)',
 } as const;
 
+type PoseFallback = 'pose' | 'canon' | 'default';
+
 export function StandingCharacterSprite({
   player,
   layout,
@@ -47,7 +53,9 @@ export function StandingCharacterSprite({
   onOpenPrivateChat,
   onMoveComplete,
 }: StandingCharacterSpriteProps) {
-  const [useDefault, setUseDefault] = useState(false);
+  const canonFacing = characterStandFacing(player.characterId);
+  const [facing, setFacing] = useState<CharacterStandFacing>(canonFacing);
+  const [poseFallback, setPoseFallback] = useState<PoseFallback>('pose');
   const [hovered, setHovered] = useState(false);
   const [activeSpeech, setActiveSpeech] = useState<{ id: string; text: string } | null>(null);
   
@@ -101,9 +109,12 @@ export function StandingCharacterSprite({
   }, [activeSpeech]);
 
   const unreadCount = usePrivateChatStore((s) => s.unread[player.id] ?? 0);
-  const src = useDefault
-    ? ASSETS.characters.default
-    : ASSETS.characters.chibi(player.characterId);
+  const src =
+    poseFallback === 'default'
+      ? ASSETS.characters.default
+      : poseFallback === 'canon'
+        ? ASSETS.characters.chibi(player.characterId)
+        : ASSETS.characters.pose(player.characterId, facing);
   const width = OUTPOST_BASE_WIDTH * layout.scale;
   const [initialState] = useState(() => {
     const store = useOutpostMovementStore.getState();
@@ -152,6 +163,20 @@ export function StandingCharacterSprite({
     targetKeyRef.current = targetKey;
   }
   const moveDuration = durationRef.current;
+
+  useEffect(() => {
+    setFacing(characterStandFacing(player.characterId));
+    setPoseFallback('pose');
+  }, [player.characterId]);
+
+  useEffect(() => {
+    const dx = layout.x - fromRef.current.x;
+    const dy = layout.y - fromRef.current.y;
+    if (Math.hypot(dx, dy) < 0.05) return;
+    const next = facingFromDelta(dx, dy, characterStandFacing(player.characterId));
+    setFacing((prev) => (prev === next ? prev : next));
+    setPoseFallback('pose');
+  }, [layout.x, layout.y, player.characterId]);
 
   useEffect(() => {
     const moved =
@@ -257,7 +282,13 @@ export function StandingCharacterSprite({
             alt=""
             className="pointer-events-none block h-auto w-full select-none"
             draggable={false}
-            onError={() => setUseDefault(true)}
+            onError={() => {
+              setPoseFallback((prev) => {
+                if (prev === 'pose' && facing !== canonFacing) return 'canon';
+                if (prev === 'pose' || prev === 'canon') return 'default';
+                return 'default';
+              });
+            }}
           />
         </div>
         <div className="absolute bottom-0 left-1/2 z-[1] w-[130%] -translate-x-1/2 translate-y-full pt-0.5 text-center">

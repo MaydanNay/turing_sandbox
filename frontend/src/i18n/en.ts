@@ -31,6 +31,12 @@ export const en: Translations = {
   'settings.languageHint': 'UI language. Default is English.',
   'settings.english': 'English',
   'settings.russian': 'Russian',
+  'settings.sound': 'Sound',
+  'settings.soundHint': 'UI clicks and chat cues.',
+  'settings.soundOn': 'On',
+  'settings.soundOff': 'Off',
+  'settings.volume': 'Volume',
+  'settings.testSound': 'Test',
   'mm.searchTitle': 'Looking for players',
   'mm.searchHeadline': 'Connecting to the outpost',
   'mm.searchBody':

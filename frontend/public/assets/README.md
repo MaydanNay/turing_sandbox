@@ -10,6 +10,7 @@ Vite отдаёт их как статику по URL `/assets/...`.
 public/assets/
 ├── locations/
 │   ├── outpost.jpg              # Фон аванпоста
+│   ├── brig.png                 # Карцер (prop, размещается в scene editor)
 │   └── menu.png                 # Главное меню — 1920×1080 (16:9)
 ├── table/
 │   ├── table.png                # Стол по центру

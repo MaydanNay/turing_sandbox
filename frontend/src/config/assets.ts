@@ -2,13 +2,22 @@
  * Пути к игровым ассетам (public/assets/).
  *
  * Стулья: table/seats/empty/01.png … 08.png
- * С персонажем: table/seats/occupied/01-captain.png
+ * С персонажем: table/seats/occupied/01_vance.png
  */
+
+import {
+  characterStandFacing,
+  type CharacterStandFacing,
+} from '@/data/characters';
+
+export type { CharacterStandFacing };
+
 export const ASSETS = {
   locations: {
     outpost: '/assets/locations/outpost.jpg',
     outpostNight: '/assets/locations/outpost-night.png',
     menu: '/assets/locations/menu.png',
+    brig: '/assets/locations/brig.png',
   },
   table: {
     round: '/assets/table/table.png',
@@ -20,11 +29,16 @@ export const ASSETS = {
       `/assets/table/seats/occupied/${String(position).padStart(2, '0')}_${characterId}.png`,
   },
   characters: {
-    /** Чиби на локации (стоит, фаза аванпоста) */
-    chibi: (id: string) => `/assets/characters/chibi/${id}.png`,
+    /** Ракурс стойки на сцене */
+    pose: (id: string, facing: CharacterStandFacing) =>
+      `/assets/characters/poses/${id}/${facing}.png`,
+    /**
+     * Стоячий спрайт по умолчанию (канонический ракурс из characterRoster.json).
+     */
+    chibi: (id: string) => ASSETS.characters.pose(id, characterStandFacing(id)),
     /** Полноразмерный портрет для экрана приватного чата (кулуары) */
     chat: (id: string) => `/assets/characters/chat/${id}_chat.png`,
-    default: '/assets/characters/chibi/default.png',
+    default: '/assets/characters/poses/default.png',
     /** slug → id для occupied-спрайтов (Капитан → captain) */
     slug: (name: string) =>
       name

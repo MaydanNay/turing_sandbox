@@ -1,4 +1,17 @@
 import type { Gender } from '@/types/game';
+import roster from '@/data/characterRoster.json';
+
+export type CharacterStandFacing = 'left' | 'right' | 'front' | 'back';
+
+export interface CharacterRosterEntry {
+  seat: number;
+  standFacing: CharacterStandFacing;
+}
+
+export type CharacterRoster = Record<string, CharacterRosterEntry>;
+
+/** Единый источник id → seat / канонический ракурс (и для Vite upload-plugin). */
+export const CHARACTER_ROSTER = roster as CharacterRoster;
 
 export interface CharacterDefinition {
   id: string;
@@ -11,12 +24,20 @@ export interface CharacterDefinition {
   role: string;
 }
 
+function seatOf(id: string): number {
+  const entry = CHARACTER_ROSTER[id];
+  if (!entry) {
+    throw new Error(`characterRoster.json: missing seat for "${id}"`);
+  }
+  return entry.seat;
+}
+
 /** Канонические 8 персонажей — id совпадает с именем файла occupied */
 export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'vance',
     displayName: 'Vance',
-    seat: 1,
+    seat: seatOf('vance'),
     gender: 'male',
     ageMin: 38,
     ageMax: 52,
@@ -25,7 +46,7 @@ export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'cole',
     displayName: 'Cole',
-    seat: 2,
+    seat: seatOf('cole'),
     gender: 'male',
     ageMin: 19,
     ageMax: 26,
@@ -34,7 +55,7 @@ export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'martha',
     displayName: 'Martha',
-    seat: 3,
+    seat: seatOf('martha'),
     gender: 'female',
     ageMin: 16,
     ageMax: 19,
@@ -43,7 +64,7 @@ export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'penny',
     displayName: 'Penny',
-    seat: 4,
+    seat: seatOf('penny'),
     gender: 'male',
     ageMin: 58,
     ageMax: 72,
@@ -52,7 +73,7 @@ export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'gwen',
     displayName: 'Gwen',
-    seat: 5,
+    seat: seatOf('gwen'),
     gender: 'female',
     ageMin: 22,
     ageMax: 32,
@@ -61,7 +82,7 @@ export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'logan',
     displayName: 'Logan',
-    seat: 6,
+    seat: seatOf('logan'),
     gender: 'female',
     ageMin: 60,
     ageMax: 90,
@@ -70,7 +91,7 @@ export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'chester',
     displayName: 'Chester',
-    seat: 7,
+    seat: seatOf('chester'),
     gender: 'female',
     ageMin: 9,
     ageMax: 13,
@@ -79,7 +100,7 @@ export const CHARACTERS: CharacterDefinition[] = [
   {
     id: 'roxy',
     displayName: 'Roxy',
-    seat: 8,
+    seat: seatOf('roxy'),
     gender: 'female',
     ageMin: 20,
     ageMax: 28,
@@ -93,6 +114,10 @@ export function getCharacterById(id: string): CharacterDefinition | undefined {
 
 export function getCharacterBySeat(seat: number): CharacterDefinition | undefined {
   return CHARACTERS.find((c) => c.seat === seat);
+}
+
+export function characterStandFacing(id: string): CharacterStandFacing {
+  return CHARACTER_ROSTER[id]?.standFacing ?? 'left';
 }
 
 /** Случайный возраст в диапазоне — один раз на сессию */
@@ -112,4 +137,15 @@ export function rollSessionAges(): Record<string, number> {
 
 export function genderLabel(gender: Gender): string {
   return gender === 'male' ? 'М' : 'Ж';
+}
+
+/** Направление стойки по вектору движения (в % сцены). */
+export function facingFromDelta(
+  dx: number,
+  dy: number,
+  fallback: CharacterStandFacing,
+): CharacterStandFacing {
+  if (Math.hypot(dx, dy) < 0.05) return fallback;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  return dy < 0 ? 'back' : 'front';
 }

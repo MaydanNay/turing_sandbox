@@ -31,6 +31,12 @@ export const ru: Translations = {
   'settings.languageHint': 'Язык интерфейса. По умолчанию — английский.',
   'settings.english': 'English',
   'settings.russian': 'Русский',
+  'settings.sound': 'Звук',
+  'settings.soundHint': 'Клики UI и сигналы чата.',
+  'settings.soundOn': 'Вкл',
+  'settings.soundOff': 'Выкл',
+  'settings.volume': 'Громкость',
+  'settings.testSound': 'Тест',
   'mm.searchTitle': 'Поиск игроков',
   'mm.searchHeadline': 'Подключение к аванпосту',
   'mm.searchBody':

@@ -1,9 +1,9 @@
 import { type WalkPoint } from '@/data/outpostWalkMask';
 import {
   OUTPOST_WANDER_BOUNDS,
-  SCENE_GROUP,
-  SCENE_LAYOUT,
   getOutpostSpot,
+  getSceneGroup,
+  getSceneLayout,
   seatLayoutToScenePos,
 } from '@/utils/seatPositions';
 import {
@@ -31,16 +31,22 @@ const RING_SAMPLES = 16;
 const PATH_MARGIN = 0.85;
 
 function tableCenterScene(): Point {
-  const { table } = SCENE_LAYOUT;
-  return seatLayoutToScenePos({
-    x: table.x + (table.offsetX ?? 0),
-    y: table.y + (table.offsetY ?? 0),
-    scale: 1,
-  });
+  const { table } = getSceneLayout();
+  const group = getSceneGroup();
+  return seatLayoutToScenePos(
+    {
+      x: table.x + (table.offsetX ?? 0),
+      y: table.y + (table.offsetY ?? 0),
+    },
+    group,
+  );
 }
 
 function tableRadiusScene(): number {
-  return (SCENE_LAYOUT.table.widthPercent / 2 / 100) * SCENE_GROUP.widthPercent * TABLE_RADIUS_PAD;
+  const { table } = getSceneLayout();
+  return (
+    (table.widthPercent / 2 / 100) * getSceneGroup().widthPercent * TABLE_RADIUS_PAD
+  );
 }
 
 function dist(a: Point, b: Point): number {
@@ -193,7 +199,7 @@ export function clampToWanderBounds(p: Point): Point {
 export function getFurnitureBlob(): CircleObstacle {
   const center = tableCenterScene();
   let r = tableRadiusScene();
-  for (const seat of SCENE_LAYOUT.seats) {
+  for (const seat of getSceneLayout().seats) {
     const p = seatLayoutToScenePos(seat);
     r = Math.max(r, dist(center, p) + SEAT_RADIUS_SCENE);
   }
@@ -256,7 +262,7 @@ function resolveOutsideObstacles(p: Point, obstacles: CircleObstacle[]): Point {
  * Spot just outside your chair (away from table center) — used on stand-up / match start.
  */
 export function standUpSpawnForSeat(seatNumber: number): Point {
-  const seat = SCENE_LAYOUT.seats[seatNumber - 1];
+  const seat = getSceneLayout().seats[seatNumber - 1];
   if (!seat) {
     const spot = getOutpostSpot(seatNumber);
     return { x: spot.x, y: spot.y };
@@ -277,7 +283,7 @@ export function standUpSpawnForSeat(seatNumber: number): Point {
 /**
  * Circle blockers for pathfinding.
  * Empty on purpose — walkability is owned by OUTPOST_WALK_POLYGONS only
- * (edit via ?walkEdit=1). Table/chairs are not circle-blocked.
+ * (edit via /scene-editor). Table/chairs are not circle-blocked.
  */
 export function getOutpostObstacles(opts?: {
   /** kept for call-site compat (sit path) */
@@ -287,7 +293,7 @@ export function getOutpostObstacles(opts?: {
   const obstacles: CircleObstacle[] = [...(opts?.dynamicObstacles ?? [])];
 
   // Add all chairs as pathfinding obstacles
-  Object.values(SCENE_LAYOUT.seats).forEach((seatLayout, index) => {
+  Object.values(getSceneLayout().seats).forEach((seatLayout, index) => {
     const seatNumber = index + 1;
     // Do not treat the chair we are explicitly trying to sit on as an obstacle
     if (opts?.passThroughSeat === seatNumber) return;
